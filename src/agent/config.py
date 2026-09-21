@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-LLMBackend = Literal["gemini", "scripted"]
+LLMBackend = Literal["gemini", "openai", "scripted"]
 
 
 class Settings(BaseSettings):
@@ -19,7 +19,14 @@ class Settings(BaseSettings):
     )
 
     google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     llm_backend: LLMBackend = "gemini"
+
+    # Any OpenAI-format endpoint: leave blank for OpenAI itself, or point at
+    # Groq, Together, OpenRouter, a local Ollama or vLLM. The wire format is
+    # the same, so the adapter does not change.
+    openai_base_url: str = ""
+    openai_model: str = "gpt-4o-mini"
     # Chosen by measurement, not by version number: on the free tier the
     # larger flash models are frequently 503 "high demand", while flash-lite
     # answered 3 probes in 4 at roughly a fifth of the latency. See the README.
@@ -53,6 +60,14 @@ class Settings(BaseSettings):
     query_timeout_seconds: float = 20.0
     # Rows pasted back into the model's context. Larger crowds out reasoning.
     max_rows_to_model: int = 30
+
+    def require_openai_key(self) -> str:
+        if not self.openai_api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not set. Set it in .env, or switch back "
+                "with AGENT_LLM_BACKEND=gemini."
+            )
+        return self.openai_api_key
 
     def require_api_key(self) -> str:
         if not self.google_api_key:

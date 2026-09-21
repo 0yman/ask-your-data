@@ -28,7 +28,7 @@ question ──▶ ┌───────────────────�
 ```bash
 pip install -r requirements-dev.txt
 python scripts/build_warehouse.py      # deterministic; ~18s
-python -m pytest                       # 102 tests, offline, no API key
+python -m pytest                       # 115 tests, offline, no API key
 
 cp .env.example .env                   # add a free key from
                                        # https://aistudio.google.com/apikey
@@ -274,6 +274,15 @@ table, a wrong column — each returns text the model can act on, and the
 message says what *does* exist. `describe_table("dim_bert")` replies with the
 list of real table names. This is the entire mechanism behind self-correction.
 
+**The provider is swappable, and that is tested.** The loop talks to
+`LLMClient`, so Gemini, any OpenAI-format endpoint (OpenAI, Groq, Together,
+OpenRouter, a local Ollama or vLLM) and a scripted stub are interchangeable
+via config. The two wire formats differ in exactly the places that break
+quietly - OpenAI sends tool arguments as a JSON string and matches results by
+`tool_call_id`, Gemini sends structured args and matches by function name - so
+the mapping is unit-tested in both directions against fake SDK objects, with
+no key and no network call.
+
 **Provider state is carried through the neutral abstraction.** The loop is
 written against provider-agnostic message types so it can run on a scripted
 stub in tests. That abstraction initially dropped Gemini 3.x's
@@ -323,7 +332,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-102 tests, no network, no API key, under 5 seconds. The suite builds a
+115 tests, no network, no API key, under 5 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

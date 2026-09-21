@@ -171,6 +171,147 @@ class GeminiLLM(LLMClient):
         raise RuntimeError("Unreachable retry state")
 
 
+class OpenAICompatibleLLM(LLMClient):
+    """Any OpenAI-format chat-completions endpoint.
+
+    The same wire format is served by OpenAI, Groq, Together, Fireworks,
+    OpenRouter and a local Ollama or vLLM, so one adapter plus a `base_url`
+    covers all of them. That is the practical payoff of keeping the agent loop
+    provider-neutral: switching vendors is a config change, not a rewrite.
+
+    The differences from Gemini that actually matter here:
+
+    * tools are declared as `{"type": "function", "function": {...}}` rather
+      than bare function declarations;
+    * a tool result goes back under a dedicated `tool` role keyed by
+      `tool_call_id`, where Gemini matches on function name - so the ids this
+      module generates have to survive the round trip;
+    * arguments arrive as a JSON *string*, not a parsed object.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        from openai import OpenAI
+
+        self._settings = settings
+        self._client = OpenAI(
+            api_key=settings.require_openai_key(),
+            base_url=settings.openai_base_url or None,
+            timeout=settings.request_timeout_ms / 1000,
+            # One retry layer, for the same reason as the Gemini client: the
+            # backoff below is the one that knows the agent's step budget.
+            max_retries=0,
+        )
+        self._model = settings.openai_model
+        self.name = self._model
+
+    def complete(
+        self, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
+    ) -> LLMResponse:
+        payload = [{"role": "system", "content": system}] + _to_openai(messages)
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": payload,
+            "temperature": self._settings.temperature,
+            "max_tokens": self._settings.max_output_tokens,
+        }
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ]
+        return _from_openai(self._call_with_retry(kwargs))
+
+    def _call_with_retry(self, kwargs: dict[str, Any]):
+        settings = self._settings
+        for attempt in range(settings.max_retries):
+            try:
+                return self._client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                if not is_retryable(exc) or attempt == settings.max_retries - 1:
+                    raise
+                delay = settings.retry_base_delay * (2**attempt)
+                delay += random.uniform(0, delay * 0.25)
+                logger.warning("OpenAI call failed (%s); retrying in %.1fs", exc, delay)
+                time.sleep(delay)
+        raise RuntimeError("Unreachable retry state")
+
+
+def _to_openai(messages: Sequence[Message]) -> list[dict[str, Any]]:
+    """Map neutral messages onto the OpenAI chat-completions shape."""
+    payload: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == "user":
+            payload.append({"role": "user", "content": message.content or ""})
+        elif message.role == "assistant":
+            entry: dict[str, Any] = {
+                "role": "assistant",
+                "content": message.content or None,
+            }
+            if message.tool_calls:
+                entry["tool_calls"] = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        # Arguments go over the wire as a JSON string here,
+                        # unlike Gemini which takes a structured object.
+                        "function": {
+                            "name": call.name,
+                            "arguments": json.dumps(call.arguments),
+                        },
+                    }
+                    for call in message.tool_calls
+                ]
+            payload.append(entry)
+        elif message.role == "tool":
+            payload.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": message.tool_call_id or "",
+                    "content": message.content or "",
+                }
+            )
+    return payload
+
+
+def _from_openai(response) -> LLMResponse:
+    choice = response.choices[0] if response.choices else None
+    message = getattr(choice, "message", None)
+
+    tool_calls: list[ToolCall] = []
+    for raw in (getattr(message, "tool_calls", None) or []):
+        try:
+            arguments = json.loads(raw.function.arguments or "{}")
+        except json.JSONDecodeError:
+            # A model can emit malformed JSON. Surfacing it as an empty call
+            # lets the tool layer reply with a usable error instead of the
+            # whole run dying on a parse exception.
+            logger.warning("Could not parse tool arguments: %r", raw.function.arguments)
+            arguments = {}
+        tool_calls.append(
+            ToolCall(name=raw.function.name, arguments=arguments, id=raw.id)
+        )
+
+    usage = {}
+    if getattr(response, "usage", None):
+        usage = {
+            "prompt_tokens": response.usage.prompt_tokens or 0,
+            "output_tokens": response.usage.completion_tokens or 0,
+        }
+
+    return LLMResponse(
+        text=(getattr(message, "content", None) or None),
+        tool_calls=tool_calls,
+        usage=usage,
+    )
+
+
 def _to_gemini(messages: Sequence[Message]):
     """Map neutral messages onto Gemini's Content/Part structure.
 
@@ -264,6 +405,8 @@ def is_retryable(exc: Exception) -> bool:
 def get_llm(settings: Settings) -> LLMClient:
     if settings.llm_backend == "gemini":
         return GeminiLLM(settings)
+    if settings.llm_backend == "openai":
+        return OpenAICompatibleLLM(settings)
     if settings.llm_backend == "scripted":
         return ScriptedLLM([])
     raise ValueError(f"Unknown LLM backend: {settings.llm_backend!r}")
