@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check src eval scripts tests
+
+      # The suite uses a scripted LLM and builds its own miniature warehouse,
+      # so it needs no API key and never calls out to a model.
+      - name: Test
+        run: python -m pytest -q
+
+  warehouse:
+    # Proves the generator still produces the warehouse the evaluation's gold
+    # queries are written against - a schema change that breaks them should
+    # fail here rather than silently invalidate the reported accuracy.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build warehouse
+        run: python scripts/build_warehouse.py
+
+      - name: Every gold query must still run and return rows
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          sys.path.insert(0, "src")
+          from agent.warehouse import Warehouse
+
+          warehouse = Warehouse(pathlib.Path("data/port.duckdb"))
+          failed = []
+          for line in pathlib.Path("eval/questions.jsonl").read_text().splitlines():
+              if not line.strip():
+                  continue
+              record = json.loads(line)
+              if not record.get("gold_sql"):
+                  continue
+              try:
+                  result = warehouse.run_sql(record["gold_sql"])
+                  if result.row_count == 0:
+                      failed.append(f"{record['id']}: returned zero rows")
+              except Exception as exc:
+                  failed.append(f"{record['id']}: {exc}")
+
+          for line in failed:
+              print(line)
+          sys.exit(1 if failed else 0)
+          PY

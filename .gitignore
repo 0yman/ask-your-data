@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Rebuilt deterministically by scripts/build_warehouse.py (fixed seed), so
+# there is no reason to carry 3.5 MB of binary in the repository.
+data/*.duckdb
+data/*.duckdb.wal

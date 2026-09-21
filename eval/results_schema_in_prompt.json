@@ -1,0 +1,489 @@
+{
+  "rows": [
+    {
+      "id": "q01",
+      "difficulty": "easy",
+      "question": "How many berths does the port have?",
+      "answer": "The port has 8 berths.",
+      "stop_reason": "final_answer",
+      "steps": 3,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 12.83,
+      "usage": {
+        "prompt_tokens": 3712,
+        "output_tokens": 73
+      },
+      "final_sql": "SELECT COUNT(*) FROM dim_berth LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q02",
+      "difficulty": "easy",
+      "question": "How many vessel calls were recorded in 2024?",
+      "answer": "There were 1,610 vessel calls recorded in 2024.",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 103.29,
+      "usage": {
+        "prompt_tokens": 6871,
+        "output_tokens": 173
+      },
+      "final_sql": "SELECT COUNT(*) FROM fact_vessel_call AS fvc JOIN dim_date AS dd ON fvc.arrival_date_key = dd.date_key WHERE dd.year = 2024 LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q03",
+      "difficulty": "easy",
+      "question": "Which cargo type has the longest average dwell time?",
+      "answer": "The cargo type with the longest average dwell time is Hazardous Chemicals, with an average dwell time of 9.88 days.",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 6.37,
+      "usage": {
+        "prompt_tokens": 6874,
+        "output_tokens": 196
+      },
+      "final_sql": "SELECT t2.cargo_type, AVG(t1.dwell_days) AS avg_dwell_days FROM fact_container_movement AS t1 JOIN dim_cargo_type AS t2 ON t1.cargo_type_key = t2.cargo_type_key GROUP BY t2.cargo_type ORDER BY avg_dwell_days DESC LIMIT 1",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q04",
+      "difficulty": "easy",
+      "question": "How many distinct vessel operators call at this port?",
+      "answer": "There are 8 distinct vessel operators that call at the port.",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 10.07,
+      "usage": {
+        "prompt_tokens": 2351,
+        "output_tokens": 72
+      },
+      "final_sql": "SELECT COUNT(DISTINCT operator) FROM dim_vessel LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q05",
+      "difficulty": "easy",
+      "question": "What is the total TEU handled across all years?",
+      "answer": "The total TEU handled across all years is 5,842,399.",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 2.49,
+      "usage": {
+        "prompt_tokens": 2355,
+        "output_tokens": 77
+      },
+      "final_sql": "SELECT SUM(teu) FROM fact_container_movement LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q06",
+      "difficulty": "medium",
+      "question": "What is the average moves per hour for each berth? List the best first.",
+      "answer": "The average moves per hour for each berth, ordered from best to worst, are:\n- Berth B06: 44.43 moves per hour\n- Berth B04: 36.93 moves per hour\n- Berth B05: 36.85 moves per hour\n- Berth B03: 29.74 moves per hour\n- Berth B02: 22.23 moves per hour\n- Berth B07: 18.19 moves per hour\n- Berth B01: 15.31 moves per hour\n- Berth B08: 7.82 moves per hour",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 7.04,
+      "usage": {
+        "prompt_tokens": 6984,
+        "output_tokens": 310
+      },
+      "final_sql": "SELECT b.berth_code, AVG(v.moves_per_hour) AS avg_moves_per_hour FROM fact_vessel_call AS v JOIN dim_berth AS b ON v.berth_key = b.berth_key GROUP BY b.berth_code ORDER BY avg_moves_per_hour DESC LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q07",
+      "difficulty": "medium",
+      "question": "Which month of 2024 had the highest TEU throughput?",
+      "answer": "The month with the highest TEU throughput in 2024 was August, with a total of 204,832 TEUs.",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 38.53,
+      "usage": {
+        "prompt_tokens": 2432,
+        "output_tokens": 164
+      },
+      "final_sql": "SELECT d.month_name, SUM(f.teu) AS total_teu FROM fact_container_movement AS f JOIN dim_date AS d ON f.date_key = d.date_key WHERE d.year = 2024 GROUP BY d.month, d.month_name ORDER BY total_teu DESC LIMIT 1",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q08",
+      "difficulty": "medium",
+      "question": "Compare the average dwell time for containers that had a customs hold against those that did not.",
+      "answer": "The average dwell time for containers with a customs hold is 10.27 days, while the average dwell time for containers without a customs hold is 5.06 days.",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 7.39,
+      "usage": {
+        "prompt_tokens": 2406,
+        "output_tokens": 113
+      },
+      "final_sql": "SELECT customs_hold, AVG(dwell_days) AS avg_dwell_days FROM fact_container_movement GROUP BY customs_hold LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q09",
+      "difficulty": "medium",
+      "question": "How much total demurrage was charged to each customer segment?",
+      "answer": "The total demurrage charged to each customer segment is as follows:\n- SMB: $9,057,977.12\n- Mid-Market: $14,798,820.40\n- Enterprise: $12,141,760.01",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 96.48,
+      "usage": {
+        "prompt_tokens": 6812,
+        "output_tokens": 209
+      },
+      "final_sql": "SELECT c.segment, SUM(f.demurrage_usd) AS total_demurrage FROM fact_container_movement AS f JOIN dim_customer AS c ON f.customer_key = c.customer_key GROUP BY c.segment LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q10",
+      "difficulty": "medium",
+      "question": "What percentage of container movements involve hazardous cargo?",
+      "answer": "Approximately 4.78% of container movements involve hazardous cargo.",
+      "stop_reason": "final_answer",
+      "steps": 4,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 11.34,
+      "usage": {
+        "prompt_tokens": 5197,
+        "output_tokens": 169
+      },
+      "final_sql": "SELECT 100.0 * SUM(CASE WHEN ct.is_hazardous THEN fcm.container_count ELSE 0 END) / SUM(fcm.container_count) AS hazardous_percentage FROM fact_container_movement AS fcm JOIN dim_cargo_type AS ct ON fcm.cargo_type_key = ct.cargo_type_key LIMIT 1000",
+      "execution_match": false,
+      "final_query_match": false,
+      "answer_has_figures": 0.0,
+      "declined": null,
+      "covers_gold": false
+    },
+    {
+      "id": "q11",
+      "difficulty": "medium",
+      "question": "Which five customers generated the most demurrage in 2025?",
+      "answer": "The five customers that generated the most demurrage in 2025 are:\n1. Red Sea Commodities: $1,180,040.92\n2. Cairo Industrial Supply: $1,169,179.80\n3. Danube Shipping Partners: $1,098,846.12\n4. Gulf Logistics Holding: $1,076,284.89\n5. Mediterranean Freight SA: $1,062,726.09",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 36.19,
+      "usage": {
+        "prompt_tokens": 7066,
+        "output_tokens": 316
+      },
+      "final_sql": "SELECT c.customer_name, SUM(f.demurrage_usd) AS total_demurrage FROM fact_container_movement AS f JOIN dim_date AS d ON f.date_key = d.date_key JOIN dim_customer AS c ON f.customer_key = c.customer_key WHERE d.year = 2025 GROUP BY c.customer_name ORDER BY total_demurrage DESC LIMIT 5",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q12",
+      "difficulty": "medium",
+      "question": "Which vessel type waits longest before berthing on average?",
+      "answer": "The vessel type that waits the longest before berthing on average is the Post-Panamax, with an average waiting time of 6.73 hours. The other vessel types have average waiting times of 6.55 hours for Neo-Panamax, 6.54 hours for Panamax, and 6.47 hours for Feeder vessels.",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 22.27,
+      "usage": {
+        "prompt_tokens": 6908,
+        "output_tokens": 239
+      },
+      "final_sql": "SELECT v.vessel_type, AVG(vc.waiting_hours) AS avg_waiting_hours FROM fact_vessel_call AS vc JOIN dim_vessel AS v ON vc.vessel_key = v.vessel_key GROUP BY v.vessel_type ORDER BY avg_waiting_hours DESC LIMIT 1000",
+      "execution_match": false,
+      "final_query_match": false,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q13",
+      "difficulty": "hard",
+      "question": "Which operator achieves the best average moves per hour, counting only berths with at least four cranes?",
+      "answer": "The operator that achieves the best average moves per hour at berths with at least four cranes is Maersk Line, with an average of 42.19 moves per hour.",
+      "stop_reason": "final_answer",
+      "steps": 6,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 14.63,
+      "usage": {
+        "prompt_tokens": 8559,
+        "output_tokens": 269
+      },
+      "final_sql": "SELECT v.operator, AVG(vc.moves_per_hour) AS avg_moves_per_hour FROM fact_vessel_call AS vc JOIN dim_vessel AS v ON vc.vessel_key = v.vessel_key JOIN dim_berth AS b ON vc.berth_key = b.berth_key WHERE b.crane_count >= 4 GROUP BY v.operator ORDER BY avg_moves_per_hour DESC LIMIT 1",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q14",
+      "difficulty": "hard",
+      "question": "Which berth underperforms most relative to how many cranes it has, measured as moves per hour per crane?",
+      "answer": "The berth that underperforms most relative to its crane count is B07, which has 3 cranes and achieves an average of 6.06 moves per hour per crane.",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 9.49,
+      "usage": {
+        "prompt_tokens": 7143,
+        "output_tokens": 267
+      },
+      "final_sql": "SELECT b.berth_code, b.crane_count, AVG(v.moves_per_hour) AS avg_moves_per_hour, AVG(v.moves_per_hour) / b.crane_count AS moves_per_hour_per_crane FROM fact_vessel_call AS v JOIN dim_berth AS b ON v.berth_key = b.berth_key GROUP BY b.berth_code, b.crane_count ORDER BY moves_per_hour_per_crane ASC LIMIT 1000",
+      "execution_match": false,
+      "final_query_match": false,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q15",
+      "difficulty": "hard",
+      "question": "For each terminal, what share of vessel calls waited more than 12 hours before berthing?",
+      "answer": "The share of vessel calls that waited more than 12 hours before berthing, broken down by terminal, is as follows:\n- Alexandria Container Terminal: 15.91% (377 out of 2,370 calls)\n- East Harbour Quay: 15.30% (43 out of 281 calls)\n- El Dekheila Terminal: 15.94% (346 out of 2,170 calls)",
+      "stop_reason": "final_answer",
+      "steps": 5,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 44.48,
+      "usage": {
+        "prompt_tokens": 7000,
+        "output_tokens": 333
+      },
+      "final_sql": "SELECT b.terminal, COUNT(*) AS total_calls, SUM(CASE WHEN v.waiting_hours > 12 THEN 1 ELSE 0 END) AS long_wait_calls, (SUM(CASE WHEN v.waiting_hours > 12 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) AS share_long_wait_percent FROM fact_vessel_call AS v JOIN dim_berth AS b ON v.berth_key = b.berth_key GROUP BY b.terminal LIMIT 1000",
+      "execution_match": false,
+      "final_query_match": false,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q16",
+      "difficulty": "hard",
+      "question": "Compare total TEU per year and show the year-over-year change.",
+      "answer": "The total TEU handled per year and the year-over-year changes are as follows:\n- In 2023, the total TEU was 1,947,148.\n- In 2024, the total TEU was 1,907,902, representing a decrease of 39,246 TEU (approximately -2.02%) compared to 2023.\n- In 2025, the total TEU was 1,987,349, representing an increase of 79,447 TEU (approximately +4.16%) compared to 2024.",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 10.78,
+      "usage": {
+        "prompt_tokens": 2449,
+        "output_tokens": 250
+      },
+      "final_sql": "SELECT d.year, SUM(f.teu) AS total_teu FROM fact_container_movement AS f JOIN dim_date AS d ON f.date_key = d.date_key GROUP BY d.year ORDER BY d.year LIMIT 1000",
+      "execution_match": false,
+      "final_query_match": false,
+      "answer_has_figures": 0.875,
+      "declined": null,
+      "covers_gold": false
+    },
+    {
+      "id": "q17",
+      "difficulty": "hard",
+      "question": "What are the top three customers by TEU in the fourth quarter of 2024, and what was their average dwell time?",
+      "answer": "The top three customers by TEU in the fourth quarter of 2024 were:\n1. Levant Trading Group, with 44,372 TEU and an average dwell time of 5.64 days.\n2. Aegean Logistics, with 42,819 TEU and an average dwell time of 5.31 days.\n3. Danube Shipping Partners, with 41,659 TEU and an average dwell time of 5.91 days.",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 3.9,
+      "usage": {
+        "prompt_tokens": 2567,
+        "output_tokens": 292
+      },
+      "final_sql": "SELECT c.customer_name, SUM(f.teu) AS total_teu, AVG(f.dwell_days) AS avg_dwell_days FROM fact_container_movement AS f JOIN dim_customer AS c ON f.customer_key = c.customer_key JOIN dim_date AS d ON f.date_key = d.date_key WHERE d.year = 2024 AND d.quarter = 4 GROUP BY c.customer_name ORDER BY total_teu DESC LIMIT 3",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q18",
+      "difficulty": "hard",
+      "question": "Is average dwell time worse for containers arriving at the weekend than on a weekday?",
+      "answer": "The average dwell time for containers arriving on a weekend is 6.02 days, while the average dwell time for containers arriving on a weekday is 5.33 days. Therefore, the average dwell time is worse (longer) for containers arriving at the weekend.",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 34.35,
+      "usage": {
+        "prompt_tokens": 2436,
+        "output_tokens": 164
+      },
+      "final_sql": "SELECT d.is_weekend, AVG(f.dwell_days) AS avg_dwell_days FROM fact_container_movement AS f JOIN dim_date AS d ON f.date_key = d.date_key GROUP BY d.is_weekend LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q19",
+      "difficulty": "hard",
+      "question": "Break down average dwell time by quarter for 2024 and 2025.",
+      "answer": "The average dwell time (in days) for 2024 and 2025, broken down by quarter, is as follows:\n\n**2024:**\n*   Q1: 5.47 days\n*   Q2: 5.46 days\n*   Q3: 5.37 days\n*   Q4: 5.56 days\n\n**2025:**\n*   Q1: 5.52 days\n*   Q2: 5.47 days\n*   Q3: 5.49 days\n*   Q4: 5.47 days",
+      "stop_reason": "final_answer",
+      "steps": 2,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 17.08,
+      "usage": {
+        "prompt_tokens": 2615,
+        "output_tokens": 291
+      },
+      "final_sql": "SELECT d.year, d.quarter, AVG(f.dwell_days) AS avg_dwell_days FROM fact_container_movement AS f JOIN dim_date AS d ON f.date_key = d.date_key WHERE d.year IN (2024, 2025) GROUP BY d.year, d.quarter ORDER BY d.year, d.quarter LIMIT 1000",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q20",
+      "difficulty": "hard",
+      "question": "Which operator sends the largest share of its calls to the East harbour?",
+      "answer": "The operator that sends the largest share of its calls to the East harbour is Evergreen Marine, with 9.41% of its calls going to that harbour.",
+      "stop_reason": "final_answer",
+      "steps": 6,
+      "queries_run": 1,
+      "failed_attempts": 0,
+      "latency_s": 58.63,
+      "usage": {
+        "prompt_tokens": 8505,
+        "output_tokens": 272
+      },
+      "final_sql": "SELECT v.operator, SUM(CASE WHEN b.harbour = 'East' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS east_harbour_share FROM fact_vessel_call AS fvc JOIN dim_vessel AS v ON fvc.vessel_key = v.vessel_key JOIN dim_berth AS b ON fvc.berth_key = b.berth_key GROUP BY v.operator ORDER BY east_harbour_share DESC LIMIT 1",
+      "execution_match": true,
+      "final_query_match": true,
+      "answer_has_figures": 1.0,
+      "declined": null,
+      "covers_gold": true
+    },
+    {
+      "id": "q21",
+      "difficulty": "trap",
+      "question": "What was the average crew size per vessel call?",
+      "answer": "The provided database schema does not contain information regarding crew size for vessels or vessel calls. Therefore, it is not possible to calculate the average crew size per vessel call.",
+      "stop_reason": "final_answer",
+      "steps": 4,
+      "queries_run": 0,
+      "failed_attempts": 0,
+      "latency_s": 23.75,
+      "usage": {
+        "prompt_tokens": 5196,
+        "output_tokens": 98
+      },
+      "final_sql": null,
+      "execution_match": null,
+      "final_query_match": null,
+      "answer_has_figures": null,
+      "declined": true,
+      "covers_gold": null
+    },
+    {
+      "id": "q22",
+      "difficulty": "trap",
+      "question": "How much revenue did the port earn from stevedoring in 2025?",
+      "answer": "The provided database does not contain information regarding stevedoring revenue. The only financial data available in the warehouse is 'demurrage_usd' within the 'fact_container_movement' table, which relates to charges for container dwell time, not stevedoring services. Therefore, it is not possible to calculate the port's revenue from stevedoring.",
+      "stop_reason": "final_answer",
+      "steps": 8,
+      "queries_run": 2,
+      "failed_attempts": 0,
+      "latency_s": 62.56,
+      "usage": {
+        "prompt_tokens": 14648,
+        "output_tokens": 291
+      },
+      "final_sql": "SELECT column_name FROM information_schema.columns WHERE table_name LIKE 'fact_%' AND column_name LIKE '%revenue%' OR column_name LIKE '%usd%' LIMIT 1000",
+      "execution_match": null,
+      "final_query_match": null,
+      "answer_has_figures": null,
+      "declined": true,
+      "covers_gold": null
+    }
+  ],
+  "summary": {
+    "questions": 22,
+    "answerable": 20,
+    "traps": 2,
+    "execution_accuracy": 0.75,
+    "final_query_accuracy": 0.75,
+    "gold_coverage": 0.9,
+    "answer_figure_coverage": 0.944,
+    "decline_accuracy": 1.0,
+    "execution_accuracy_by_difficulty": {
+      "easy": 1.0,
+      "hard": 0.625,
+      "medium": 0.714
+    },
+    "mean_steps": 3.955,
+    "mean_queries": 1.0,
+    "self_corrections": 0,
+    "mean_latency_s": 28.815,
+    "total_prompt_tokens": 121086,
+    "total_output_tokens": 4638
+  },
+  "model": "gemini-3.1-flash-lite",
+  "generated_at": "2026-09-21 14:47 UTC"
+}

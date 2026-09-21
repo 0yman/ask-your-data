@@ -1,0 +1,13 @@
+services:
+  agent:
+    build: .
+    image: port-analyst-agent:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # Without a key the service starts and reports "degraded" on /health;
+      # /sql and /schema still work, so the guardrails can be exercised.
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      AGENT_LLM_BACKEND: ${AGENT_LLM_BACKEND:-gemini}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
+    restart: unless-stopped
