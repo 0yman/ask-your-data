@@ -11,10 +11,13 @@ from __future__ import annotations
 import csv
 import re
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
+
+from .warehouse import connect
 
 SUPPORTED_SUFFIXES = {".csv", ".tsv", ".xlsx"}
 
@@ -49,6 +52,23 @@ def table_name_for(filename: str) -> str:
     return name[:60]
 
 
+# An .xlsx is a zip archive. Real workbooks unpack to about 8x their size (the
+# 540k-row UCI retail file: 7.8x); an archive built to unpack to thousands of
+# times its size is an attack on the memory of whoever opens it.
+MAX_XLSX_EXPANSION = 100
+MAX_XLSX_UNPACKED_BYTES = 1_500_000_000
+
+
+def _refuse_zip_bomb(path: Path) -> None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            unpacked = sum(entry.file_size for entry in archive.infolist())
+    except zipfile.BadZipFile:
+        return  # not a zip at all: openpyxl says so in its own words
+    if unpacked > MAX_XLSX_UNPACKED_BYTES or unpacked > MAX_XLSX_EXPANSION * max(path.stat().st_size, 1):
+        raise DatasetError("the workbook unpacks to far more data than a spreadsheet of its size holds")
+
+
 def _xlsx_to_csv(path: Path, out: Path) -> None:
     """First sheet only. openpyxl rather than pandas: a few hundred KB instead
     of tens of MB, for a job that is reading cells in order."""
@@ -57,6 +77,7 @@ def _xlsx_to_csv(path: Path, out: Path) -> None:
     except ImportError as exc:  # pragma: no cover - it is in requirements
         raise DatasetError("Reading Excel files needs `pip install openpyxl`.") from exc
 
+    _refuse_zip_bomb(path)
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:
@@ -89,7 +110,7 @@ def import_file(path: Path, db_path: Path) -> ImportResult:
             source = Path(tmp) / "sheet.csv"
             _xlsx_to_csv(path, source)
 
-        connection = duckdb.connect(str(db_path))
+        connection = connect(db_path)
         try:
             delimiter = "\t" if suffix == ".tsv" else None
             reader = (
@@ -121,7 +142,7 @@ def import_file(path: Path, db_path: Path) -> ImportResult:
 def drop_table(table: str, db_path: Path) -> bool:
     if not db_path.exists():
         return False
-    connection = duckdb.connect(str(db_path))
+    connection = connect(db_path)
     try:
         existing = {
             row[0] for row in connection.execute(
@@ -137,13 +158,20 @@ def drop_table(table: str, db_path: Path) -> bool:
         connection.close()
 
 
-def table_count(db_path: Path) -> int:
+def table_names(db_path: Path) -> list[str]:
     if not db_path.exists():
-        return 0
-    connection = duckdb.connect(str(db_path), read_only=True)
+        return []
+    connection = connect(db_path, read_only=True)
     try:
-        return connection.execute(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main'"
-        ).fetchone()[0]
+        return [
+            row[0] for row in connection.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main' ORDER BY table_name"
+            ).fetchall()
+        ]
     finally:
         connection.close()
+
+
+def table_count(db_path: Path) -> int:
+    return len(table_names(db_path))

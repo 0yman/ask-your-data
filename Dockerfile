@@ -19,6 +19,11 @@ COPY scripts/ ./scripts/
 # starts with data already in place.
 RUN python scripts/build_warehouse.py
 
+# The two real public datasets (UCI Online Retail, Our World in Data CO2),
+# downloaded and imported at build time. If a source is unreachable the image
+# still builds; the app simply does not offer that dataset.
+RUN python scripts/build_examples.py --allow-missing
+
 # Uploaded tables live on their own volume (see docker-compose.yml), so they
 # survive rebuilds. The directory must exist in the image: a volume mounted
 # over a missing path comes up owned by root and the app could not write it.

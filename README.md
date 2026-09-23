@@ -7,7 +7,8 @@ including the SQL it wrote. It can only ever **read** your data: nothing you
 ask can change or delete it.
 
 Try it on the built-in sample (three years of a container port's operations),
-or drop in your own CSV and Excel files.
+on two real public datasets (a UK online shop's 541,909 sales, and CO₂
+emissions by country), or drop in your own CSV and Excel files.
 
 ![Asking about an uploaded Excel file: a written answer with its figures highlighted, and the table of results behind it](docs/screenshot.png)
 
@@ -36,8 +37,12 @@ Gemini key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 (no credit card), paste it in, and click **Save key**. It is checked with
 Google and stored in a `.env` file on your computer.
 
-**4. Ask.** Pick **Sample data** or **My files**, then ask a question or click
+**4. Ask.** Pick a dataset or **My files**, then ask a question or click
 one of the suggestions.
+
+The two real datasets are optional: `python scripts/build_examples.py`
+downloads and imports them (about 40 MB, under a minute), and the page offers
+them from then on.
 
 To stop, close the black window (or press Ctrl+C in it). Your files are kept.
 
@@ -91,6 +96,35 @@ before connecting a model.
 | Setup failed partway | Delete the `.venv` folder and run the start file again. |
 
 ---
+
+## Running it as a public demo
+
+The same app runs as a public website with one setting,
+`AGENT_PUBLIC_MODE=true`. On your own computer there is one user; on a public
+server there are strangers, so four things change:
+
+| | On your computer | Public demo |
+|---|---|---|
+| Uploaded files | yours, kept | a private workspace per visitor, deleted after an hour idle |
+| The AI key | saved to `.env` from the page | the server's key, held as a secret; visitors may add their own for their visit only, never written |
+| Questions | unlimited | 30 per visitor per hour and 250 a day in total on the server's key, 3 at a time; own-key visitors are not counted |
+| Files | 50 MB | 10 MB, 5 tables per visitor; Excel files that unpack to 100x their size are refused |
+
+A visitor's workspace is found by a random token the page sends in a header,
+not a cookie: Hugging Face shows a Space inside an iframe on another domain,
+where browsers block cookies. A page left open past the hour gets a clear
+"your workspace was cleared" instead of an answer computed on data it is no
+longer showing.
+
+The daily total exists because the free Gemini tier allows a fixed number of
+model calls a day, and one question takes 3-6 of them. The per-visitor limit
+counts the forwarded client address, which can be forged; the daily total is
+the limit that cannot be talked around.
+
+`python scripts/deploy_space.py` publishes it to Hugging Face Spaces: it stores
+the key from `.env` as a Space secret, switches public mode on, and uploads
+exactly the committed files (`git archive`), so `.env` and local data cannot
+leak into it. The Space builds the Dockerfile, which imports both real datasets.
 
 ## How it works
 
@@ -411,6 +445,7 @@ src/agent/
   tools.py       tool specs + dispatcher; failures return messages
   llm.py         provider-neutral tool-calling; Gemini + scripted stub
   agent.py       the loop: steps, self-correction, tracing
+  sessions.py    one workspace per visitor on a public server; the question quota
   datasets.py    CSV / Excel files -> tables (the only code that writes)
   envfile.py     saving the API key from the page into .env
   api.py         FastAPI, and the web page in static/
@@ -428,9 +463,9 @@ eval/
 | `POST /ask` | yes | Question in; answer, result rows, SQL, and the full step trace out |
 | `POST /sql` | no | Run a SELECT through the same guardrails the agent uses |
 | `GET /tables` · `GET /status` | no | The active dataset's tables and columns; what the page needs to draw itself |
-| `POST /dataset` | no | Switch between the sample and your files |
+| `POST /dataset` | no | Switch between the sample, the two real datasets, and your files |
 | `POST /data` · `DELETE /data/{table}` | no | Upload CSV/TSV/XLSX files as tables; remove one |
-| `POST /settings/key` | — | Save a Gemini key to `.env`; only accepted from this computer |
+| `POST /settings/key` | — | Save a Gemini key to `.env`, only from this computer. On a public server: use it for this visitor's workspace, never saved |
 | `GET /health` · `GET /metrics` | no | Liveness; Prometheus |
 
 Uploaded tables are queried through the same read-only connection and the
@@ -444,7 +479,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-136 tests, no network, no API key, under 5 seconds. The suite builds a
+156 tests, no network, no API key, under 10 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are
@@ -475,6 +510,10 @@ invalidate the reported accuracy fails the build instead.
   one run, written by the same person who built the agent (though knowing the
   traps in advance, not hinting at them). See the section above for what it
   does and does not show.
+- **The public demo's limits live in one process.** Workspaces and question
+  counts are in memory: a restart clears them, and running several replicas
+  would need a shared store. For a free single-container demo that is the
+  right trade.
 - **Tables are not linked.** Uploaded files become independent tables; the
   agent only joins them when the column names clearly match, and says so.
 

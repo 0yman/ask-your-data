@@ -48,7 +48,7 @@ def keyless(isolated, settings):
 
 def use_llm(llm):
     """Swap a scripted model into whichever agent is active."""
-    agent: PortAnalystAgent = api._state["agent"]
+    agent: PortAnalystAgent = api._store.local.agent
     agent._llm = llm
 
 
@@ -206,9 +206,9 @@ class TestDatasets:
             assert restarted.get("/status").json()["dataset"] == "mine"
 
     def test_the_port_rules_are_only_given_for_the_port_data(self, client):
-        assert "Berth productivity" in api._state["agent"].system_prompt
+        assert "Berth productivity" in api._store.local.agent.system_prompt
         upload(client, ("sales.csv", SALES_CSV))
-        prompt = api._state["agent"].system_prompt
+        prompt = api._store.local.agent.system_prompt
         assert "Berth productivity" not in prompt
         assert "sales" in prompt
 

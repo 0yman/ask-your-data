@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ask your data</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f4b8f'/%3E%3Crect x='7' y='17' width='4' height='8' fill='%23fff'/%3E%3Crect x='14' y='11' width='4' height='14' fill='%23ffe27a'/%3E%3Crect x='21' y='7' width='4' height='18' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
@@ -205,6 +206,9 @@
   details.block summary { cursor: pointer; font-weight: 700; font-size: .92rem; color: var(--ink-soft); }
   details.block[open] summary { margin-bottom: 10px; }
 
+  .privacy { margin: 0; font-size: .82rem; color: var(--ink-faint); }
+  .foot { max-width: 1240px; margin: 0 auto; padding: 0 20px 32px; font-size: .85rem; color: var(--ink-faint); }
+
   @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } * { transition: none !important; } }
 </style>
 </head>
@@ -227,7 +231,9 @@
     <h2 id="data-heading">Your data <span id="table-count"></span></h2>
 
     <div class="switch" role="group" aria-label="Which data to ask about">
-      <button type="button" data-dataset="sample" aria-pressed="true">Sample data</button>
+      <button type="button" data-dataset="sample" aria-pressed="true">Port (sample)</button>
+      <button type="button" data-dataset="retail" aria-pressed="false" hidden>Online shop</button>
+      <button type="button" data-dataset="co2" aria-pressed="false" hidden>CO₂ by country</button>
       <button type="button" data-dataset="mine" aria-pressed="false">My files</button>
     </div>
     <p class="dataset-note" id="dataset-note"></p>
@@ -238,6 +244,7 @@
       <input type="file" id="file-input" multiple accept=".csv,.tsv,.xlsx" hidden>
       <small id="accepted">CSV or Excel · each file becomes a table</small>
     </div>
+    <p class="privacy" id="privacy" hidden></p>
     <ul class="uploads" id="uploads" aria-live="polite"></ul>
 
     <p class="empty" id="tables-empty" hidden></p>
@@ -258,7 +265,7 @@
         <button class="btn primary" type="submit" id="key-save">Save key</button>
       </form>
       <div id="key-status" aria-live="polite"></div>
-      <p class="fine">The key is saved in the <code>.env</code> file on this computer and only sent to Google. Until then you can browse the tables and run SQL yourself below.</p>
+      <p class="fine" id="key-fine">The key is saved in the <code>.env</code> file on this computer and only sent to Google. Until then you can browse the tables and run SQL yourself below.</p>
     </div>
 
     <h2 id="ask-heading">Ask a question</h2>
@@ -289,17 +296,55 @@
 
 </main>
 
+<footer class="foot">Built by Ayman Eldaly · <a href="https://github.com/0yman/ask-your-data" target="_blank" rel="noopener">Source code and evaluation on GitHub</a></footer>
+
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { status: null, tables: [], busy: false };
+  const state = { status: null, tables: [], busy: false, showSetup: false };
 
-  const SAMPLE_QUESTIONS = [
-    "Which berth underperforms most relative to how many cranes it has?",
-    "Which month of 2024 had the highest TEU throughput?",
-    "Compare average dwell time for containers with and without a customs hold.",
-    "What was the average crew size per vessel call?",
-  ];
+  const QUESTIONS = {
+    sample: [
+      "Which berth underperforms most relative to how many cranes it has?",
+      "Which month of 2024 had the highest TEU throughput?",
+      "Compare average dwell time for containers with and without a customs hold.",
+      "What was the average crew size per vessel call?",
+    ],
+    // Each of these has an obvious query that gives the wrong answer.
+    retail: [
+      "What was the total revenue from sales, not counting returns or cancelled orders?",
+      "Which product had the highest net number of units sold, after subtracting returns?",
+      "Outside the United Kingdom, which country generated the most revenue?",
+      "Which month had the highest sales?",
+    ],
+    co2: [
+      "Which country emitted the most CO2 in 2022?",
+      "What were total global CO2 emissions in 2020, in million tonnes?",
+      "Which country had the highest CO2 emissions per person in 2022?",
+      "In which year did United States CO2 emissions peak?",
+    ],
+  };
+
+  const PLACEHOLDERS = {
+    sample: "e.g. Which berth is the least productive per crane?",
+    retail: "e.g. Which customers spent the most in 2011?",
+    co2: "e.g. How have Egypt's CO2 emissions changed since 2000?",
+    mine: "Ask anything about your tables",
+  };
+
+  const NOTES = {
+    sample: "A container port's operations: vessels, berths, cargo and customers over three years. Generated, with realistic patterns.",
+    retail: 'Real sales from a UK online gift shop, Dec 2010 – Dec 2011: 541,909 invoice lines. From the <a href="https://archive.ics.uci.edu/dataset/352/online+retail" target="_blank" rel="noopener">UCI Machine Learning Repository</a> (CC BY 4.0).',
+    co2: 'CO₂ and greenhouse-gas emissions for every country, year by year. From <a href="https://github.com/owid/co2-data" target="_blank" rel="noopener">Our World in Data</a> (CC BY 4.0).',
+    mine: "Upload CSV or Excel files. Each becomes a table you can ask about.",
+  };
+
+  // The workspace this tab uses on a public server. Sent as a header rather
+  // than kept in a cookie, because the page may be inside another site's
+  // iframe, where browsers block cookies. Unused on your own computer.
+  const SESSION_KEY = "ask-your-data-session";
+  let sessionId = null;
+  try { sessionId = sessionStorage.getItem(SESSION_KEY); } catch {}
 
   const escapeHtml = (text) => String(text ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -307,10 +352,25 @@
 
   async function api(path, options = {}) {
     let response;
-    try { response = await fetch(path, options); }
-    catch { throw new Error("Could not reach the app. Is it still running in its window?"); }
+    const headers = { ...(options.headers || {}) };
+    if (sessionId) headers["X-Session"] = sessionId;
+    try { response = await fetch(path, { ...options, headers }); }
+    catch { throw new Error("Could not reach the app. Check it is still running, then try again."); }
+    const issued = response.headers.get("X-Session");
+    if (issued && issued !== sessionId) {
+      const replaced = sessionId !== null;
+      sessionId = issued;
+      try { sessionStorage.setItem(SESSION_KEY, issued); } catch {}
+      // The old workspace expired, so what the page shows is gone. Redraw
+      // once this call has finished.
+      if (replaced) setTimeout(() => { $("sql").dataset.touched = ""; refresh().catch(() => {}); }, 0);
+    }
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Something went wrong.");
+    if (!response.ok) {
+      const error = new Error(typeof body.detail === "string" ? body.detail : "Something went wrong.");
+      error.status = response.status;
+      throw error;
+    }
     return body;
   }
   const post = (path, data) => api(path, {
@@ -340,7 +400,7 @@
   // Split first, escape each piece after: running the regex over escaped
   // text would mark the "39" inside "&#39;" and break the entity.
   function markNumbers(text) {
-    return String(text ?? "").split(/(\b\d[\d,]*(?:\.\d+)?%?)/g)
+    return String(text ?? "").split(/(\b\d(?:[\d,]*\d)?(?:\.\d+)?%?)/g)
       .map((part, i) => (i % 2 ? `<mark>${escapeHtml(part)}</mark>` : escapeHtml(part)))
       .join("");
   }
@@ -370,22 +430,29 @@
   function renderData() {
     const s = state.status;
     const mine = s.dataset === "mine";
-    document.querySelectorAll(".switch button").forEach((b) =>
-      b.setAttribute("aria-pressed", String(b.dataset.dataset === s.dataset)));
+    document.querySelectorAll(".switch button").forEach((b) => {
+      const name = b.dataset.dataset;
+      b.hidden = (name === "retail" || name === "co2") && !s.examples.includes(name);
+      b.setAttribute("aria-pressed", String(name === s.dataset));
+    });
     $("drop").hidden = !mine;
-    $("dataset-note").textContent = mine
-      ? "Upload CSV or Excel files. Each becomes a table you can ask about."
-      : "A container port's operations: vessels, berths, cargo and customers over three years.";
+    $("dataset-note").innerHTML = NOTES[s.dataset] || "";
+    $("question").placeholder = PLACEHOLDERS[s.dataset] || "";
+    $("accepted").textContent = `CSV or Excel, up to ${s.max_upload_mb} MB · each file becomes a table`;
+    $("privacy").hidden = !(mine && s.public);
+    $("privacy").textContent = `Only you can see your files, and they are deleted after ${s.session_idle_minutes} minutes without activity. To write the SQL, your question, the column names and a few rows are sent to Google's Gemini, so leave out anything confidential.`;
 
     const t = state.tables;
     $("table-count").textContent = t.length ? String(t.length) : "";
     $("tables-empty").hidden = t.length > 0;
-    $("tables-empty").textContent = mine ? "No files yet. Add a spreadsheet above to start." : "The sample data is missing. Run the start file again to rebuild it.";
+    $("tables-empty").textContent = mine ? "No files yet. Add a spreadsheet above to start."
+      : s.dataset === "sample" ? "The sample data is missing. Run the start file again to rebuild it."
+      : "This dataset could not be opened.";
     $("tables").innerHTML = t.map((tb) => `
       <li><details>
         <summary>
           <span class="tname">${escapeHtml(tb.name)}</span>
-          <span class="tmeta">${tb.rows.toLocaleString()} rows · ${tb.columns.length} columns${mine ? "" : ` · ${escapeHtml(tb.kind)}`}</span>
+          <span class="tmeta">${tb.rows.toLocaleString()} rows · ${tb.columns.length} columns${s.dataset === "sample" ? ` · ${escapeHtml(tb.kind)}` : ""}</span>
           ${mine ? `<button class="remove" type="button" data-table="${escapeHtml(tb.name)}" aria-label="Remove ${escapeHtml(tb.name)}" title="Remove">×</button>` : ""}
         </summary>
         <div class="cols">${tb.columns.map((c) => `<span>${escapeHtml(c.name)} <i>${escapeHtml(c.type.toLowerCase())}</i></span>`).join("")}</div>
@@ -393,7 +460,7 @@
   }
 
   function examplesFor() {
-    if (state.status.dataset === "sample") return SAMPLE_QUESTIONS;
+    if (QUESTIONS[state.status.dataset]) return QUESTIONS[state.status.dataset];
     const t = state.tables[0];
     if (!t) return [];
     // Grouping by an ID ("total per Order ID") makes a useless example, so
@@ -410,14 +477,20 @@
   function renderAsk() {
     const s = state.status;
     const ready = s.has_key && state.tables.length > 0;
-    $("setup").hidden = s.has_key;
+    $("setup").hidden = s.has_key && !state.showSetup;
     const engine = $("engine");
     engine.dataset.ready = String(s.has_key);
+    const demoKey = s.public && !s.own_key;
+    const left = demoKey && s.questions_left !== null
+      ? ` · ${s.questions_left} free question${s.questions_left === 1 ? "" : "s"} left this hour` : "";
     $("engine-text").innerHTML = s.has_key
-      ? `Answers: <b>${escapeHtml(s.engine_label)}</b><button type="button" id="change-key">change key</button>`
+      ? `Answers: <b>${escapeHtml(s.engine_label)}</b>${escapeHtml(left)}<button type="button" id="change-key">${demoKey ? "use your own key" : "change key"}</button>`
       : `Answers: <b>no AI key yet</b>`;
     const change = $("change-key");
-    if (change) change.onclick = () => { $("setup").hidden = false; $("key-input").focus(); };
+    if (change) change.onclick = () => { state.showSetup = true; $("setup").hidden = false; $("key-input").focus(); };
+    if (s.public) {
+      $("key-fine").textContent = "Your key is kept in memory for this visit only, never saved, and only sent to Google. It is forgotten after an hour without activity.";
+    }
 
     $("question").disabled = !ready || state.busy;
     $("ask-btn").disabled = !ready || state.busy;
@@ -441,6 +514,7 @@
   document.querySelectorAll(".switch button").forEach((button) => button.addEventListener("click", async () => {
     if (button.getAttribute("aria-pressed") === "true") return;
     $("uploads").innerHTML = ""; $("result").innerHTML = ""; $("sql-result").innerHTML = "";
+    $("question").value = "";
     $("sql").dataset.touched = "";
     try { await post("/dataset", { dataset: button.dataset.dataset }); await refresh(); }
     catch (err) { $("uploads").innerHTML = `<li class="error">${escapeHtml(err.message)}</li>`; }
@@ -487,6 +561,7 @@
     try {
       const body = await post("/settings/key", { key });
       $("key-input").value = "";
+      state.showSetup = false;
       $("key-status").innerHTML = `<div class="ok">${escapeHtml(body.note || "Key saved. You can ask questions now.")}</div>`;
       await refresh();
       $("question").focus();
@@ -535,8 +610,17 @@
     state.busy = true; renderAsk();
     $("result").innerHTML = `<div class="working"><span class="spinner"></span>Working it out: reading the tables, writing and running SQL… usually 10–40 seconds.</div>`;
     try { renderAnswer(await post("/ask", { question })); }
-    catch (err) { $("result").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; }
-    finally { state.busy = false; renderAsk(); $("question").focus(); }
+    catch (err) {
+      $("result").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+      if (err.status === 429) state.showSetup = true;  // out of demo questions: offer their own key
+    }
+    finally {
+      state.busy = false;
+      // The number of free questions left changed.
+      if (state.status.public) state.status = await api("/status").catch(() => state.status);
+      renderAsk();
+      $("question").focus();
+    }
   }
   $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
   $("question").addEventListener("keydown", (e) => {
@@ -559,7 +643,18 @@
     } catch (err) { $("sql-result").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; }
   });
 
-  refresh().then(() => {
+  async function start() {
+    await refresh();
+    // ?data=retail (or co2, sample) opens a dataset directly, for links.
+    const wanted = new URLSearchParams(location.search).get("data");
+    if (wanted && wanted !== state.status.dataset
+        && (wanted === "sample" || state.status.examples.includes(wanted))) {
+      await post("/dataset", { dataset: wanted });
+      await refresh();
+    }
+  }
+
+  start().then(() => {
     const q = new URLSearchParams(location.search).get("q");
     if (q && state.status.has_key && state.tables.length) { $("question").value = q; ask(q); }
   }).catch((err) => {

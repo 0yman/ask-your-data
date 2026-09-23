@@ -293,12 +293,13 @@ def _last_error(messages: list[Message]) -> str:
 def build_agent(
     settings: Settings, llm: LLMClient | None = None, dataset: str = "sample"
 ) -> PortAnalystAgent:
-    """Construct an agent over the sample warehouse or the user's own tables.
+    """Construct an agent over the sample warehouse, a public example dataset,
+    or the user's own tables.
 
     The LLM client is left unbuilt unless one is given, so this succeeds - and
     the schema and SQL tools work - without an API key.
     """
-    path = settings.db_path if dataset == "sample" else settings.user_db_path
+    path = settings.dataset_path(dataset)
     warehouse = Warehouse(
         path,
         max_rows=settings.max_rows,

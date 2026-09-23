@@ -14,6 +14,10 @@ ENV_FILE = REPO_ROOT / ".env"
 
 LLMBackend = Literal["gemini", "openai", "scripted"]
 
+# Public datasets offered next to the sample port warehouse. Each is one
+# DuckDB file in `examples_dir`, named after its key.
+EXAMPLE_DATASETS = ("retail", "co2")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -68,10 +72,35 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
     # Remembers which dataset the app was last showing.
     state_path: Path = DATA_DIR / "app_state.json"
+    # Real public datasets, ready to ask about. Built by
+    # scripts/build_examples.py; the app offers whichever of them exist.
+    examples_dir: Path = DATA_DIR / "examples"
     max_rows: int = 1000
     query_timeout_seconds: float = 20.0
     # Rows pasted back into the model's context. Larger crowds out reasoning.
     max_rows_to_model: int = 30
+    # DuckDB's own default is 80% of the machine's memory per database. Blank
+    # keeps it; a public server sets a cap so one visitor's query cannot take
+    # the memory every other visitor is using.
+    duckdb_memory_limit: str = ""
+
+    # --- public demo -----------------------------------------------------
+    # Off, the app has one user: the person at this computer. On, every
+    # visitor gets a private workspace, the server's key is rationed, and
+    # nothing a visitor does is written to .env.
+    public_mode: bool = False
+    sessions_dir: Path = DATA_DIR / "sessions"
+    session_idle_minutes: int = 60
+    max_sessions: int = 300
+    public_max_upload_mb: int = 10
+    public_max_tables: int = 5
+    # Questions answered on the server's key. Free-tier Gemini allows a fixed
+    # number of model calls a day, and one question is 3-6 calls.
+    public_questions_per_hour: int = 30
+    public_questions_per_day: int = 250
+    # Questions being worked on at once, across all visitors. The free tier
+    # also limits calls per minute; queueing beats a wave of 429s.
+    public_concurrent_questions: int = 3
 
     def require_openai_key(self) -> str:
         if not self.openai_api_key:
@@ -87,6 +116,21 @@ class Settings(BaseSettings):
         if self.llm_backend == "gemini":
             return bool(self.google_api_key)
         return True
+
+    def dataset_path(self, dataset: str) -> Path:
+        if dataset == "sample":
+            return self.db_path
+        if dataset == "mine":
+            return self.user_db_path
+        if dataset in EXAMPLE_DATASETS:
+            return self.examples_dir / f"{dataset}.duckdb"
+        raise ValueError(f"Unknown dataset {dataset!r}")
+
+    def available_examples(self) -> list[str]:
+        return [name for name in EXAMPLE_DATASETS if self.dataset_path(name).exists()]
+
+    def upload_limit_mb(self) -> int:
+        return self.public_max_upload_mb if self.public_mode else self.max_upload_mb
 
     def require_api_key(self) -> str:
         if not self.google_api_key:

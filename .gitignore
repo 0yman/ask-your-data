@@ -20,3 +20,9 @@ data/app_state.json
 
 # Downloaded by eval/user_data/run.py; public but large.
 data/user_eval/
+
+# Built by scripts/build_examples.py from public sources.
+data/examples/
+
+# Visitors' workspaces on a public server; deleted as they expire.
+data/sessions/

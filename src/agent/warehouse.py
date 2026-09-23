@@ -32,6 +32,23 @@ class QueryTimeout(RuntimeError):
     pass
 
 
+# Every connection in the process shares one configuration: DuckDB refuses a
+# second connection to a file that is already open with different settings.
+_CONFIG: dict[str, str] = {}
+
+
+def set_memory_limit(limit: str) -> None:
+    """Cap the memory of each database opened from now on ("" = DuckDB's own
+    default). Called once at startup."""
+    _CONFIG.pop("memory_limit", None)
+    if limit:
+        _CONFIG["memory_limit"] = limit
+
+
+def connect(path: Path, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(str(path), read_only=read_only, config=dict(_CONFIG))
+
+
 @dataclass(slots=True)
 class QueryResult:
     sql: str
@@ -103,7 +120,7 @@ class Warehouse:
         self.db_path = db_path
         self.max_rows = max_rows
         self.timeout_seconds = timeout_seconds
-        self._connection = duckdb.connect(str(db_path), read_only=True)
+        self._connection = connect(db_path, read_only=True)
         self._lock = threading.Lock()
 
     def close(self) -> None:
@@ -213,4 +230,6 @@ __all__ = [
     "TableInfo",
     "UnsafeSQLError",
     "Warehouse",
+    "connect",
+    "set_memory_limit",
 ]
