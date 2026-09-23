@@ -107,12 +107,18 @@ class GeminiLLM(LLMClient):
     """
 
     def __init__(self, settings: Settings) -> None:
-        from google import genai
-        from google.genai import types
+        # The key first: someone without one needs to hear about the key, not
+        # about a package they would only need once they had one.
+        api_key = settings.require_api_key()
+        try:
+            from google import genai
+            from google.genai import types
+        except ImportError as exc:
+            raise RuntimeError("The Gemini SDK is not installed: pip install google-genai") from exc
 
         self._settings = settings
         self._client = genai.Client(
-            api_key=settings.require_api_key(),
+            api_key=api_key,
             # The SDK retries internally by default. Left on, a 503 would be
             # retried by the SDK *and* by `_call_with_retry` below, so five
             # configured attempts become twenty-five with compounding backoff
@@ -190,11 +196,15 @@ class OpenAICompatibleLLM(LLMClient):
     """
 
     def __init__(self, settings: Settings) -> None:
-        from openai import OpenAI
+        api_key = settings.require_openai_key()  # before the import; see GeminiLLM
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("The OpenAI SDK is not installed: pip install openai") from exc
 
         self._settings = settings
         self._client = OpenAI(
-            api_key=settings.require_openai_key(),
+            api_key=api_key,
             base_url=settings.openai_base_url or None,
             timeout=settings.request_timeout_ms / 1000,
             # One retry layer, for the same reason as the Gemini client: the
