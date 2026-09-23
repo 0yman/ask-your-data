@@ -7,8 +7,8 @@ their uploaded tables, their choice of dataset, their key if they add one. None
 of it is visible to anyone else, and none of it outlives an hour of inactivity.
 
 A visitor is recognised by a random token the page sends in a header rather
-than by a cookie. A Hugging Face Space is shown inside an iframe on another
-domain, and browsers increasingly refuse cookies there.
+than by a cookie, so the demo also works embedded in another site - inside an
+iframe on another domain, where browsers increasingly refuse cookies.
 """
 
 from __future__ import annotations

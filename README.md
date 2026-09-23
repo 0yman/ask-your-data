@@ -111,8 +111,8 @@ server there are strangers, so four things change:
 | Files | 50 MB | 10 MB, 5 tables per visitor; Excel files that unpack to 100x their size are refused |
 
 A visitor's workspace is found by a random token the page sends in a header,
-not a cookie: Hugging Face shows a Space inside an iframe on another domain,
-where browsers block cookies. A page left open past the hour gets a clear
+not a cookie, so the demo also works embedded in another site, where browsers
+block cookies from the iframe. A page left open past the hour gets a clear
 "your workspace was cleared" instead of an answer computed on data it is no
 longer showing.
 
@@ -121,10 +121,19 @@ model calls a day, and one question takes 3-6 of them. The per-visitor limit
 counts the forwarded client address, which can be forged; the daily total is
 the limit that cannot be talked around.
 
-`python scripts/deploy_space.py` publishes it to Hugging Face Spaces: it stores
-the key from `.env` as a Space secret, switches public mode on, and uploads
-exactly the committed files (`git archive`), so `.env` and local data cannot
-leak into it. The Space builds the Dockerfile, which imports both real datasets.
+The live demo runs on Render's free tier from [`render.yaml`](render.yaml):
+the Dockerfile builds the image, including both real datasets, and every push
+to `main` redeploys it. The key is a Render secret, entered once when the
+service is created, never in the repository. To run your own copy:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/0yman/ask-your-data)
+
+The free instance has 512 MB, so DuckDB is capped at 160 MB per database.
+Six visitors running heavy queries at once peaked at 254 MB in total, and a
+query that needed more than the cap failed on its own with an error, without
+taking the server down. Free instances sleep after 15 minutes idle;
+[`keep-awake.yml`](.github/workflows/keep-awake.yml) pings the demo every
+ten minutes so a visitor rarely waits for it to wake.
 
 ## How it works
 

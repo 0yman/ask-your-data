@@ -1,0 +1,23 @@
+# The public demo, as a Render Blueprint: one free web service built from the
+# Dockerfile. GOOGLE_API_KEY is asked for when the Blueprint is created and is
+# stored by Render as a secret - it is never in this repository.
+services:
+  - type: web
+    name: ask-your-data
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: AGENT_PUBLIC_MODE
+        value: "true"
+      # The free instance has 512 MB. Measured: six visitors running heavy
+      # queries at once peaked at 254 MB with this cap, and a query that
+      # needed more failed on its own instead of taking the server down.
+      - key: AGENT_DUCKDB_MEMORY_LIMIT
+        value: 160MB
+      - key: AGENT_PUBLIC_CONCURRENT_QUESTIONS
+        value: "2"
