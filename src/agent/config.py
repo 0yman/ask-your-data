@@ -9,13 +9,17 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "data"
+ENV_FILE = REPO_ROOT / ".env"
 
 LLMBackend = Literal["gemini", "openai", "scripted"]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_prefix="AGENT_", extra="ignore", protected_namespaces=()
+        # Absolute, so the app finds its .env whatever folder it is launched
+        # from - a relative path silently loads nothing otherwise.
+        env_file=ENV_FILE, env_prefix="AGENT_", extra="ignore", protected_namespaces=()
     )
 
     google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
@@ -55,7 +59,15 @@ class Settings(BaseSettings):
     max_sql_retries: int = 3
 
     # --- warehouse -------------------------------------------------------
-    db_path: Path = REPO_ROOT / "data" / "port.duckdb"
+    # The sample dataset, generated from a fixed seed by build_warehouse.py.
+    db_path: Path = DATA_DIR / "port.duckdb"
+    # Tables built from the user's own CSV and Excel files. The agent only
+    # ever opens this read-only; only the upload code writes to it.
+    user_db_path: Path = DATA_DIR / "my_data.duckdb"
+    uploads_dir: Path = DATA_DIR / "uploads"
+    max_upload_mb: int = 50
+    # Remembers which dataset the app was last showing.
+    state_path: Path = DATA_DIR / "app_state.json"
     max_rows: int = 1000
     query_timeout_seconds: float = 20.0
     # Rows pasted back into the model's context. Larger crowds out reasoning.
@@ -68,6 +80,13 @@ class Settings(BaseSettings):
                 "with AGENT_LLM_BACKEND=gemini."
             )
         return self.openai_api_key
+
+    def has_model_key(self) -> bool:
+        if self.llm_backend == "openai":
+            return bool(self.openai_api_key)
+        if self.llm_backend == "gemini":
+            return bool(self.google_api_key)
+        return True
 
     def require_api_key(self) -> str:
         if not self.google_api_key:

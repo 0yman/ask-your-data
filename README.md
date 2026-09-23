@@ -1,10 +1,98 @@
-# Port Analyst Agent
+# Ask your data
 
-A tool-calling agent that answers analytical questions about container
-terminal operations by writing and executing **read-only SQL** against a
-DuckDB star schema — with guardrails that make "read-only" a control rather
-than a request, and an evaluation harness that measures whether the answers
-are actually right.
+Ask questions about a spreadsheet or database in plain English — *"Which
+customer spent the most?"*, *"How did sales change month by month?"* — and get
+the answer, the table of numbers behind it, and every step taken to find it,
+including the SQL it wrote. It can only ever **read** your data: nothing you
+ask can change or delete it.
+
+Try it on the built-in sample (three years of a container port's operations),
+or drop in your own CSV and Excel files.
+
+![Asking about an uploaded Excel file: a written answer with its figures highlighted, and the table of results behind it](docs/screenshot.png)
+
+---
+
+## Get started
+
+You need **Python 3.11 or newer** — install it from
+[python.org/downloads](https://www.python.org/downloads/), and on Windows tick
+**"Add python.exe to PATH"** during setup.
+
+**1. Download this project.** Click the green **Code** button at the top of
+this page, then **Download ZIP**, and unzip it anywhere.
+
+**2. Start it.**
+
+- **Windows:** double-click **`start-windows.bat`**.
+- **Mac / Linux:** open a terminal in the folder and run `./start-mac-linux.sh`.
+
+The first start installs what it needs and builds the sample data — about two
+minutes, with an internet connection. After that it starts in seconds, and your
+browser opens at **http://localhost:8000**.
+
+**3. Connect a free AI model.** The page shows you how: get a free Google
+Gemini key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+(no credit card), paste it in, and click **Save key**. It is checked with
+Google and stored in a `.env` file on your computer.
+
+**4. Ask.** Pick **Sample data** or **My files**, then ask a question or click
+one of the suggestions.
+
+To stop, close the black window (or press Ctrl+C in it). Your files are kept.
+
+<details>
+<summary>Prefer the command line?</summary>
+
+```bash
+pip install -r requirements.txt
+python app.py              # opens http://localhost:8000
+```
+
+Or with Docker: `docker compose up --build` (set `GOOGLE_API_KEY` in `.env`
+first — for safety, the page only accepts a key from the same computer).
+
+</details>
+
+---
+
+## Using your own data
+
+Switch to **My files** and drop in **CSV**, **TSV** or **Excel (.xlsx)**
+files. Each file becomes a table named after it (`Sales Q3.xlsx` →
+`sales_q3`); for Excel, the first sheet is used. The first row must be the
+column headers. Uploading a file with the same name again replaces its table.
+
+Your data stays on your computer. When you ask a question, what goes to Google
+is the question, the table and column names, and the rows the agent's queries
+return while it works — not your whole file.
+
+Each answer comes with:
+
+- **The numbers behind it** — the result table of the final query, so you can
+  check the figures instead of trusting the sentence.
+- **How it got there** — each step in plain words, including any query that
+  failed and how it recovered.
+- **The SQL it wrote** — copy it, or open it in **Run SQL yourself** and
+  change it.
+
+**Run SQL yourself** works without a key, so you can look around your data
+before connecting a model.
+
+## Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| *"Python 3.11 or newer is needed"* | Install it from python.org; on Windows tick "Add python.exe to PATH". |
+| *"Google rejected that key"* | Copy it again from aistudio.google.com/apikey — the whole key, no spaces. |
+| *"Google's free AI model is overloaded"* | It happens on the free tier. Wait a minute and ask again. |
+| *"the file could not be read as a table"* | Make sure the first row holds the column names and each row is one record. |
+| The answer looks wrong | Open **The numbers behind it** and **The SQL it wrote** — the mistake is usually visible there. Asking more specifically, or naming the column, helps. |
+| Setup failed partway | Delete the `.venv` folder and run the start file again. |
+
+---
+
+## How it works
 
 ```
 question ──▶ ┌──────────────────────────────────────────────┐
@@ -18,42 +106,21 @@ question ──▶ ┌───────────────────�
              └──────────────────────────────────────────────┘
                               │
                               ▼
-                   answer + full trace + SQL
+            answer + result rows + full trace + SQL
 ```
 
----
+A tool-calling agent, no framework: the model sees the question and the
+schema, calls tools (`list_tables`, `describe_table`, `sample_rows`,
+`run_sql`, `final_answer`), reads what comes back, and stops when it has the
+numbers. Every SQL statement is parsed and checked before it reaches the
+database, on a connection that is read-only in its own right.
 
-## Quickstart
+The rest of this README is the engineering write-up: the sample data, the
+guardrails, and the evaluation — which, like the sibling project, changed
+decisions along the way.
 
-```bash
-pip install -r requirements-dev.txt
-python scripts/build_warehouse.py      # deterministic; ~18s
-python -m pytest                       # 115 tests, offline, no API key
 
-cp .env.example .env                   # add a free key from
-                                       # https://aistudio.google.com/apikey
-PYTHONPATH=src python -m agent.cli --trace \
-  "Which berth underperforms most relative to how many cranes it has?"
-```
-
-```
---- step 1 ---  list_tables() -> ok
---- step 2 ---  describe_table(table='dim_berth') -> ok
---- step 3 ---  describe_table(table='fact_vessel_call') -> ok
---- step 4 ---  run_sql(sql='SELECT b.berth_code, b.crane_count, AVG(vc.moves_per_hour)…') -> ok
---- step 5 ---  final_answer(...) -> ok
-
-The berth that underperforms most relative to its crane count is B07. It has
-3 cranes and an average productivity of 18.19 moves per hour, giving the
-lowest productivity per crane at 6.06.
-```
-
-Or `docker compose up --build`. Without a key the service still starts:
-`/schema` and `/sql` work, `/ask` returns 503, and `/health` says `degraded`.
-
----
-
-## The data
+## The sample data
 
 A star schema for a container terminal — two fact tables, five conformed
 dimensions, three years of daily activity:
@@ -308,7 +375,9 @@ src/agent/
   tools.py       tool specs + dispatcher; failures return messages
   llm.py         provider-neutral tool-calling; Gemini + scripted stub
   agent.py       the loop: steps, self-correction, tracing
-  api.py         FastAPI
+  datasets.py    CSV / Excel files -> tables (the only code that writes)
+  envfile.py     saving the API key from the page into .env
+  api.py         FastAPI, and the web page in static/
   cli.py         command line
 
 eval/
@@ -320,11 +389,18 @@ eval/
 
 | Endpoint | Needs a key | Purpose |
 |---|---|---|
-| `POST /ask` | yes | Question in; answer, SQL, and the full step trace out |
+| `POST /ask` | yes | Question in; answer, result rows, SQL, and the full step trace out |
 | `POST /sql` | no | Run a SELECT through the same guardrails the agent uses |
-| `GET /schema` | no | Tables, columns, types, row counts |
-| `GET /health` | no | `ok` / `degraded` / `down`, separately for warehouse and model |
-| `GET /metrics` | no | Prometheus |
+| `GET /tables` · `GET /status` | no | The active dataset's tables and columns; what the page needs to draw itself |
+| `POST /dataset` | no | Switch between the sample and your files |
+| `POST /data` · `DELETE /data/{table}` | no | Upload CSV/TSV/XLSX files as tables; remove one |
+| `POST /settings/key` | — | Save a Gemini key to `.env`; only accepted from this computer |
+| `GET /health` · `GET /metrics` | no | Liveness; Prometheus |
+
+Uploaded tables are queried through the same read-only connection and the
+same guardrails as the sample: `DELETE FROM your_table` is refused like any
+other write. The one component that writes is the importer, which builds its
+SQL from sanitised names - never from model output.
 
 `/ask` returns the trace, not just the prose. For an agent that is the
 difference between a product and a magic box: the caller sees which tools ran,
@@ -332,7 +408,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-115 tests, no network, no API key, under 5 seconds. The suite builds a
+136 tests, no network, no API key, under 5 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are
@@ -340,7 +416,7 @@ reproducible rather than dependent on a model's mood.
 
 ```bash
 python -m pytest
-python -m ruff check src eval scripts tests
+python -m ruff check src eval scripts tests app.py
 ```
 
 CI runs the suite on Python 3.11 and 3.12, rebuilds the warehouse, and
@@ -359,6 +435,12 @@ invalidate the reported accuracy fails the build instead.
   no real terminal's data was used.
 - **One model, one run.** No temperature sweep, no repeated trials, so the
   numbers carry no variance estimate.
+- **The evaluation covers the sample data only.** Questions about your own
+  files use a general prompt with none of the sample's business rules, and no
+  benchmark has been run on that path. The result table and the SQL are shown
+  with every answer precisely so you can check it.
+- **Tables are not linked.** Uploaded files become independent tables; the
+  agent only joins them when the column names clearly match, and says so.
 
 ## License
 

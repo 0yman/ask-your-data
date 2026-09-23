@@ -13,3 +13,7 @@ build/
 # there is no reason to carry 3.5 MB of binary in the repository.
 data/*.duckdb
 data/*.duckdb.wal
+
+# Your uploaded files and app state stay on your machine.
+data/uploads/
+data/app_state.json

@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.duckdb binary
+# cmd.exe mis-parses labels (goto :failed) in batch files with LF endings.
+*.bat text eol=crlf
+*.sh  text eol=lf

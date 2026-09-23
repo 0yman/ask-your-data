@@ -1,13 +1,20 @@
 services:
   agent:
     build: .
-    image: port-analyst-agent:latest
+    image: ask-your-data:latest
     ports:
       - "8000:8000"
     environment:
-      # Without a key the service starts and reports "degraded" on /health;
-      # /sql and /schema still work, so the guardrails can be exercised.
+      # Set the key here or in .env. The web page's "Save key" form only
+      # accepts requests from the same computer, which a container is not.
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       AGENT_LLM_BACKEND: ${AGENT_LLM_BACKEND:-gemini}
-      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-10}
+      AGENT_USER_DB_PATH: /app/userdata/my_data.duckdb
+      AGENT_STATE_PATH: /app/userdata/app_state.json
+      AGENT_UPLOADS_DIR: /app/userdata/uploads
+    volumes:
+      - userdata:/app/userdata
     restart: unless-stopped
+
+volumes:
+  userdata:

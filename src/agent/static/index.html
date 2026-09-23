@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask your data</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  /* Same system as its sibling app, "Ask your documents": Atkinson
+     Hyperlegible for the interface, a serif for answers because they are
+     reading material, and one highlighter yellow. Here it marks the figures
+     an answer rests on, the way you would mark numbers on a printout. */
+  :root {
+    --ground:     #f5f6f8;
+    --surface:    #ffffff;
+    --surface-2:  #f0f2f5;
+    --ink:        #1a2233;
+    --ink-soft:   #4d5768;
+    --ink-faint:  #7c8594;
+    --rule:       #dde1e8;
+    --accent:     #2f4b8f;
+    --accent-ink: #ffffff;
+    --accent-dim: #e6ebf5;
+    --mark:       #ffe27a;
+    --mark-ink:   #3b2f00;
+    --good:       #1f7a4d;
+    --good-bg:    #e3f3ea;
+    --warn:       #9a5b00;
+    --warn-bg:    #fff4df;
+    --bad:        #b3261e;
+    --code-bg:    #f3f5f9;
+    --shadow:     0 1px 2px rgba(26, 34, 51, .06), 0 4px 16px rgba(26, 34, 51, .05);
+
+    --ui:   "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --read: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #11141a; --surface: #191d25; --surface-2: #20252f;
+      --ink: #e7eaf0; --ink-soft: #aab2c0; --ink-faint: #7d8595; --rule: #2b313c;
+      --accent: #8ea7e6; --accent-ink: #0f1522; --accent-dim: #1f2940;
+      --mark: #5c4a0f; --mark-ink: #ffe9a3;
+      --good: #5fcf94; --good-bg: #16291f; --warn: #f2b14c; --warn-bg: #2d2412; --bad: #ff8a80;
+      --code-bg: #141821; --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #11141a; --surface: #191d25; --surface-2: #20252f;
+    --ink: #e7eaf0; --ink-soft: #aab2c0; --ink-faint: #7d8595; --rule: #2b313c;
+    --accent: #8ea7e6; --accent-ink: #0f1522; --accent-dim: #1f2940;
+    --mark: #5c4a0f; --mark-ink: #ffe9a3;
+    --good: #5fcf94; --good-bg: #16291f; --warn: #f2b14c; --warn-bg: #2d2412; --bad: #ff8a80;
+    --code-bg: #141821; --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--ui); font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  a { color: var(--accent); }
+
+  /* ---------- header ---------- */
+  .top {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 10px 20px; max-width: 1240px; margin: 0 auto; padding: 22px 20px 6px;
+  }
+  .top h1 { margin: 0; font-size: 1.35rem; letter-spacing: -.01em; }
+  .top p { margin: 2px 0 0; color: var(--ink-soft); font-size: .95rem; }
+  .engine {
+    display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+    border: 1px solid var(--rule); border-radius: 999px; background: var(--surface);
+    font-size: .85rem; color: var(--ink-soft);
+  }
+  .engine .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+  .engine[data-ready="true"] .dot { background: var(--good); }
+  .engine b { color: var(--ink); }
+  .engine button { border: 0; background: none; color: var(--accent); padding: 0 0 0 4px; font-size: .85rem; text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ---------- layout ---------- */
+  .layout {
+    display: grid; grid-template-columns: minmax(290px, 370px) 1fr; gap: 20px;
+    max-width: 1240px; margin: 0 auto; padding: 14px 20px 48px; align-items: start;
+  }
+  @media (max-width: 880px) { .layout { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0;
+  }
+  .panel h2, .subhead {
+    margin: 0; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint);
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .panel h2 span { font-family: var(--mono); letter-spacing: 0; text-transform: none; }
+
+  /* ---------- dataset switch ---------- */
+  .switch { display: grid; grid-template-columns: 1fr 1fr; background: var(--surface-2); border-radius: 10px; padding: 4px; gap: 4px; }
+  .switch button {
+    border: 0; background: none; border-radius: 7px; padding: 8px 10px; font-size: .9rem; font-weight: 700; color: var(--ink-soft);
+  }
+  .switch button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .dataset-note { margin: 0; color: var(--ink-soft); font-size: .9rem; }
+
+  .drop {
+    border: 2px dashed var(--rule); border-radius: 12px; padding: 20px 14px; text-align: center;
+    color: var(--ink-soft); background: var(--surface-2); transition: border-color .15s, background .15s;
+  }
+  .drop.over { border-color: var(--accent); background: var(--accent-dim); }
+  .drop strong { display: block; color: var(--ink); margin-bottom: 4px; }
+  .drop small { display: block; margin-top: 8px; color: var(--ink-faint); font-size: .8rem; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+  .uploads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: .88rem; }
+  .uploads li { display: flex; gap: 8px; align-items: baseline; }
+  .tag { font-family: var(--mono); font-size: .72rem; padding: 1px 6px; border-radius: 4px; flex: none; }
+  .tag.added { background: var(--good-bg); color: var(--good); }
+  .tag.skipped, .tag.failed { background: var(--warn-bg); color: var(--warn); }
+  .why { color: var(--ink-faint); }
+
+  .tables { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .tables li { border-top: 1px solid var(--rule); padding: 8px 2px; }
+  .tables li:first-child { border-top: 0; }
+  .tables details summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .tables details summary::-webkit-details-marker { display: none; }
+  .tables .tname { font-family: var(--mono); font-weight: 700; font-size: .9rem; overflow-wrap: anywhere; }
+  .tables .tmeta { grid-column: 1; font-size: .78rem; color: var(--ink-faint); }
+  .tables .remove {
+    grid-row: 1 / span 2; grid-column: 2; align-self: center; width: 30px; height: 30px; border-radius: 8px;
+    border: 1px solid transparent; background: none; color: var(--ink-faint); font-size: 1.1rem; line-height: 1;
+  }
+  .tables .remove:hover { border-color: var(--rule); color: var(--bad); }
+  .cols { margin: 8px 0 2px; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+  .cols span { font-family: var(--mono); font-size: .72rem; background: var(--surface-2); border-radius: 4px; padding: 1px 6px; color: var(--ink-soft); }
+  .cols span i { font-style: normal; color: var(--ink-faint); }
+  .empty { color: var(--ink-soft); font-size: .92rem; margin: 0; }
+
+  /* ---------- key setup ---------- */
+  .setup { border: 1px solid var(--accent); background: var(--accent-dim); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .setup h3 { margin: 0; font-size: 1.05rem; }
+  .setup ol { margin: 0; padding-left: 20px; color: var(--ink-soft); display: flex; flex-direction: column; gap: 4px; }
+  .setup .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .setup input { flex: 1 1 240px; padding: 9px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); font-family: var(--mono); font-size: .9rem; }
+  .setup .fine { font-size: .82rem; color: var(--ink-soft); margin: 0; }
+
+  /* ---------- ask ---------- */
+  .ask { display: flex; flex-direction: column; gap: 10px; }
+  textarea {
+    width: 100%; min-height: 84px; resize: vertical; padding: 12px 14px; border: 1px solid var(--rule);
+    border-radius: 12px; background: var(--surface); font-size: 1.02rem;
+  }
+  textarea:disabled { background: var(--surface-2); }
+  .ask-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+  .hint { color: var(--ink-faint); font-size: .82rem; }
+  .btn { border: 1px solid var(--rule); background: var(--surface); border-radius: 10px; padding: 8px 14px; font-weight: 700; font-size: .92rem; }
+  .btn:hover { border-color: var(--ink-faint); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; }
+  .examples button { border: 1px solid var(--rule); background: var(--surface-2); border-radius: 999px; padding: 5px 12px; font-size: .85rem; color: var(--ink-soft); text-align: left; }
+  .examples button:hover { border-color: var(--accent); color: var(--accent); }
+
+  .working { display: flex; align-items: center; gap: 10px; color: var(--ink-soft); }
+  .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--rule); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .notice { border-radius: 10px; padding: 10px 14px; font-size: .92rem; background: var(--warn-bg); color: var(--warn); }
+  .error { border-radius: 10px; padding: 10px 14px; font-size: .92rem; border: 1px solid var(--bad); color: var(--bad); }
+  .ok { border-radius: 10px; padding: 10px 14px; font-size: .92rem; background: var(--good-bg); color: var(--good); }
+
+  #result { display: flex; flex-direction: column; gap: 14px; }
+  /* pre-line keeps the model's own line breaks, so a list it writes reads as
+     a list instead of running together into one paragraph. */
+  .answer { font-family: var(--read); font-size: 1.12rem; line-height: 1.65; margin: 0; max-width: 70ch; overflow-wrap: anywhere; white-space: pre-line; }
+  .answer mark { background: var(--mark); color: var(--mark-ink); border-radius: 3px; padding: 0 .15em; font-family: var(--mono); font-size: .9em; }
+  .meta { font-family: var(--mono); font-size: .75rem; color: var(--ink-faint); }
+
+  .grid-wrap { overflow: auto; max-height: 360px; border: 1px solid var(--rule); border-radius: 10px; }
+  table.grid { border-collapse: collapse; width: 100%; font-size: .86rem; font-variant-numeric: tabular-nums; }
+  .grid th, .grid td { padding: 6px 10px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
+  .grid th { position: sticky; top: 0; background: var(--surface-2); font-family: var(--mono); font-size: .76rem; color: var(--ink-soft); }
+  .grid td.num { text-align: right; font-family: var(--mono); }
+  .grid tr:last-child td { border-bottom: 0; }
+
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; counter-reset: step; }
+  .steps li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; font-size: .92rem; }
+  .steps li::before {
+    counter-increment: step; content: counter(step); font-family: var(--mono); font-size: .75rem; font-weight: 700;
+    width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; background: var(--surface-2); color: var(--ink-soft);
+  }
+  .steps li.failed::before { background: var(--warn-bg); color: var(--warn); }
+  .steps li.done::before { background: var(--good-bg); color: var(--good); }
+  .steps .sub { display: block; color: var(--ink-faint); font-size: .82rem; }
+
+  pre.sql {
+    margin: 0; padding: 12px 14px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 10px;
+    font-family: var(--mono); font-size: .82rem; line-height: 1.55; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .sql-head { display: flex; justify-content: space-between; align-items: center; }
+  details.block summary { cursor: pointer; font-weight: 700; font-size: .92rem; color: var(--ink-soft); }
+  details.block[open] summary { margin-bottom: 10px; }
+
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div>
+    <h1>Ask your data</h1>
+    <p>Ask a question in plain English. It writes the SQL, runs it, and shows every step.</p>
+  </div>
+  <div class="engine" id="engine" data-ready="false">
+    <span class="dot" aria-hidden="true"></span>
+    <span id="engine-text">Loading…</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <section class="panel" aria-labelledby="data-heading">
+    <h2 id="data-heading">Your data <span id="table-count"></span></h2>
+
+    <div class="switch" role="group" aria-label="Which data to ask about">
+      <button type="button" data-dataset="sample" aria-pressed="true">Sample data</button>
+      <button type="button" data-dataset="mine" aria-pressed="false">My files</button>
+    </div>
+    <p class="dataset-note" id="dataset-note"></p>
+
+    <div class="drop" id="drop" hidden>
+      <strong>Drop spreadsheets here</strong>
+      or <button class="linkish" type="button" id="browse">choose files</button>
+      <input type="file" id="file-input" multiple accept=".csv,.tsv,.xlsx" hidden>
+      <small id="accepted">CSV or Excel · each file becomes a table</small>
+    </div>
+    <ul class="uploads" id="uploads" aria-live="polite"></ul>
+
+    <p class="empty" id="tables-empty" hidden></p>
+    <ul class="tables" id="tables"></ul>
+  </section>
+
+  <section class="panel" aria-labelledby="ask-heading">
+    <div class="setup" id="setup" hidden>
+      <h3>Connect a free AI model</h3>
+      <ol>
+        <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with Google.</li>
+        <li>Click <b>Create API key</b> and copy it. It is free and needs no card.</li>
+        <li>Paste it here.</li>
+      </ol>
+      <form class="row" id="key-form">
+        <label for="key-input" hidden>API key</label>
+        <input id="key-input" type="password" autocomplete="off" placeholder="Paste your key" required>
+        <button class="btn primary" type="submit" id="key-save">Save key</button>
+      </form>
+      <div id="key-status" aria-live="polite"></div>
+      <p class="fine">The key is saved in the <code>.env</code> file on this computer and only sent to Google. Until then you can browse the tables and run SQL yourself below.</p>
+    </div>
+
+    <h2 id="ask-heading">Ask a question</h2>
+    <form class="ask" id="ask-form">
+      <label for="question" class="hint" id="question-hint"></label>
+      <textarea id="question" placeholder="e.g. Which berth is the least productive per crane?" required></textarea>
+      <div class="ask-row">
+        <span class="hint">Enter to ask · Shift+Enter for a new line</span>
+        <button class="btn primary" type="submit" id="ask-btn">Ask</button>
+      </div>
+    </form>
+    <div class="examples" id="examples"></div>
+
+    <div id="result" aria-live="polite"></div>
+
+    <details class="block" id="sql-box">
+      <summary>Run SQL yourself</summary>
+      <form class="ask" id="sql-form">
+        <textarea id="sql" spellcheck="false" style="font-family: var(--mono); font-size: .9rem;">SELECT * FROM dim_berth</textarea>
+        <div class="ask-row">
+          <span class="hint">Read-only: anything that changes data, or reads files, is refused.</span>
+          <button class="btn" type="submit">Run</button>
+        </div>
+      </form>
+      <div id="sql-result" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;"></div>
+    </details>
+  </section>
+
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = { status: null, tables: [], busy: false };
+
+  const SAMPLE_QUESTIONS = [
+    "Which berth underperforms most relative to how many cranes it has?",
+    "Which month of 2024 had the highest TEU throughput?",
+    "Compare average dwell time for containers with and without a customs hold.",
+    "What was the average crew size per vessel call?",
+  ];
+
+  const escapeHtml = (text) => String(text ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+
+  async function api(path, options = {}) {
+    let response;
+    try { response = await fetch(path, options); }
+    catch { throw new Error("Could not reach the app. Is it still running in its window?"); }
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Something went wrong.");
+    return body;
+  }
+  const post = (path, data) => api(path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  });
+
+  // ---------- rendering helpers ----------
+
+  const isNum = (v) => typeof v === "number";
+  const fmt = (v) => {
+    if (v === null || v === undefined) return '<span style="color:var(--ink-faint)">—</span>';
+    if (isNum(v)) return Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return escapeHtml(v);
+  };
+
+  function gridHtml(table) {
+    if (!table || !table.columns.length) return "";
+    const head = table.columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
+    const body = table.rows.map((row) =>
+      `<tr>${row.map((v) => `<td class="${isNum(v) ? "num" : ""}">${fmt(v)}</td>`).join("")}</tr>`).join("");
+    const more = table.row_count > table.shown
+      ? `<div class="meta">Showing ${table.shown} of ${table.row_count.toLocaleString()} rows.</div>` : "";
+    return `<div class="grid-wrap"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}`;
+  }
+
+  // Figures in the answer are marked, so the eye goes to the numbers first.
+  // Split first, escape each piece after: running the regex over escaped
+  // text would mark the "39" inside "&#39;" and break the entity.
+  function markNumbers(text) {
+    return String(text ?? "").split(/(\b\d[\d,]*(?:\.\d+)?%?)/g)
+      .map((part, i) => (i % 2 ? `<mark>${escapeHtml(part)}</mark>` : escapeHtml(part)))
+      .join("");
+  }
+
+  // Tool calls, described the way a person would describe the work.
+  function describe(call) {
+    const a = call.arguments || {};
+    switch (call.name) {
+      case "list_tables": return ["Looked at which tables exist", ""];
+      case "describe_table": return [`Checked the columns of ${a.table}`, ""];
+      case "sample_rows": return [`Looked at a few rows of ${a.table}`, ""];
+      case "run_sql": return ["Ran a query", a.purpose || ""];
+      case "final_answer": return ["Wrote the answer", ""];
+      default: return [call.name, ""];
+    }
+  }
+  const FAIL_REASON = {
+    sql_error: "the query had an error — it read the message and tried again",
+    unsafe_sql: "refused by the safety check (only reading is allowed)",
+    unknown_table: "that table does not exist — it looked again",
+    timeout: "took too long and was stopped",
+    bad_arguments: "was called incorrectly",
+  };
+
+  // ---------- data panel ----------
+
+  function renderData() {
+    const s = state.status;
+    const mine = s.dataset === "mine";
+    document.querySelectorAll(".switch button").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.dataset === s.dataset)));
+    $("drop").hidden = !mine;
+    $("dataset-note").textContent = mine
+      ? "Upload CSV or Excel files. Each becomes a table you can ask about."
+      : "A container port's operations: vessels, berths, cargo and customers over three years.";
+
+    const t = state.tables;
+    $("table-count").textContent = t.length ? String(t.length) : "";
+    $("tables-empty").hidden = t.length > 0;
+    $("tables-empty").textContent = mine ? "No files yet. Add a spreadsheet above to start." : "The sample data is missing. Run the start file again to rebuild it.";
+    $("tables").innerHTML = t.map((tb) => `
+      <li><details>
+        <summary>
+          <span class="tname">${escapeHtml(tb.name)}</span>
+          <span class="tmeta">${tb.rows.toLocaleString()} rows · ${tb.columns.length} columns${mine ? "" : ` · ${escapeHtml(tb.kind)}`}</span>
+          ${mine ? `<button class="remove" type="button" data-table="${escapeHtml(tb.name)}" aria-label="Remove ${escapeHtml(tb.name)}" title="Remove">×</button>` : ""}
+        </summary>
+        <div class="cols">${tb.columns.map((c) => `<span>${escapeHtml(c.name)} <i>${escapeHtml(c.type.toLowerCase())}</i></span>`).join("")}</div>
+      </details></li>`).join("");
+  }
+
+  function examplesFor() {
+    if (state.status.dataset === "sample") return SAMPLE_QUESTIONS;
+    const t = state.tables[0];
+    if (!t) return [];
+    // Grouping by an ID ("total per Order ID") makes a useless example, so
+    // columns that look like identifiers are passed over.
+    const idLike = (c) => /(^|[\s_])(id|code|no|number|ref)$|^id$/i.test(c.name.trim());
+    const text = t.columns.find((c) => /char|text|string/i.test(c.type) && !idLike(c));
+    const num = t.columns.find((c) => /int|double|decimal|float|numeric|bigint/i.test(c.type) && !idLike(c));
+    const qs = [`How many rows are in ${t.name}, and what does each row represent?`];
+    if (text && num) qs.push(`What is the total ${num.name} for each ${text.name} in ${t.name}?`);
+    if (num) qs.push(`What are the highest and lowest ${num.name} values in ${t.name}?`);
+    return qs;
+  }
+
+  function renderAsk() {
+    const s = state.status;
+    const ready = s.has_key && state.tables.length > 0;
+    $("setup").hidden = s.has_key;
+    const engine = $("engine");
+    engine.dataset.ready = String(s.has_key);
+    $("engine-text").innerHTML = s.has_key
+      ? `Answers: <b>${escapeHtml(s.engine_label)}</b><button type="button" id="change-key">change key</button>`
+      : `Answers: <b>no AI key yet</b>`;
+    const change = $("change-key");
+    if (change) change.onclick = () => { $("setup").hidden = false; $("key-input").focus(); };
+
+    $("question").disabled = !ready || state.busy;
+    $("ask-btn").disabled = !ready || state.busy;
+    $("question-hint").textContent = !s.has_key
+      ? "Add a free AI key above to ask questions."
+      : state.tables.length ? "Ask anything the data could answer." : "Add a file first.";
+    $("examples").innerHTML = ready
+      ? examplesFor().map((q) => `<button type="button">${escapeHtml(q)}</button>`).join("") : "";
+    if (!$("sql").dataset.touched) {
+      $("sql").value = state.tables[0] ? `SELECT * FROM ${state.tables[0].name} LIMIT 20` : "";
+    }
+  }
+
+  async function refresh() {
+    state.status = await api("/status");
+    state.tables = await api("/tables");
+    renderData();
+    renderAsk();
+  }
+
+  document.querySelectorAll(".switch button").forEach((button) => button.addEventListener("click", async () => {
+    if (button.getAttribute("aria-pressed") === "true") return;
+    $("uploads").innerHTML = ""; $("result").innerHTML = ""; $("sql-result").innerHTML = "";
+    $("sql").dataset.touched = "";
+    try { await post("/dataset", { dataset: button.dataset.dataset }); await refresh(); }
+    catch (err) { $("uploads").innerHTML = `<li class="error">${escapeHtml(err.message)}</li>`; }
+  }));
+
+  async function upload(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    $("uploads").innerHTML = `<li class="working"><span class="spinner"></span>Reading ${files.length} file${files.length === 1 ? "" : "s"}…</li>`;
+    try {
+      const results = await api("/data", { method: "POST", body: form });
+      $("uploads").innerHTML = results.map((r) => `<li><span class="tag ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span><span>${escapeHtml(r.filename)}${
+        r.status === "added" ? `<span class="why"> → table <b>${escapeHtml(r.table)}</b>, ${r.rows.toLocaleString()} rows</span>` : `<span class="why"> — ${escapeHtml(r.reason)}</span>`}</span></li>`).join("");
+      $("sql").dataset.touched = "";
+      await refresh();
+    } catch (err) { $("uploads").innerHTML = `<li class="error">${escapeHtml(err.message)}</li>`; }
+  }
+  $("browse").addEventListener("click", () => $("file-input").click());
+  $("file-input").addEventListener("change", (e) => { upload(e.target.files); e.target.value = ""; });
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => upload(e.dataTransfer.files));
+
+  $("tables").addEventListener("click", async (e) => {
+    const button = e.target.closest(".remove");
+    if (!button) return;
+    e.preventDefault();
+    if (!confirm(`Remove the table ${button.dataset.table}? Your original file is not touched.`)) return;
+    try { await api(`/data/${encodeURIComponent(button.dataset.table)}`, { method: "DELETE" }); await refresh(); }
+    catch (err) { $("uploads").innerHTML = `<li class="error">${escapeHtml(err.message)}</li>`; }
+  });
+
+  // ---------- key ----------
+
+  $("key-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const key = $("key-input").value.trim();
+    if (!key) return;
+    $("key-save").disabled = true;
+    $("key-status").innerHTML = `<div class="working"><span class="spinner"></span>Checking the key with Google…</div>`;
+    try {
+      const body = await post("/settings/key", { key });
+      $("key-input").value = "";
+      $("key-status").innerHTML = `<div class="ok">${escapeHtml(body.note || "Key saved. You can ask questions now.")}</div>`;
+      await refresh();
+      $("question").focus();
+    } catch (err) {
+      $("key-status").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+    } finally { $("key-save").disabled = false; }
+  });
+
+  // ---------- asking ----------
+
+  function renderAnswer(d) {
+    const calls = d.steps.flatMap((s) => s.tool_calls);
+    const steps = calls.map((c) => {
+      const [what, sub] = describe(c);
+      const cls = !c.ok ? "failed" : c.name === "final_answer" ? "done" : "";
+      const why = !c.ok ? (FAIL_REASON[c.error_kind] || "did not work") : sub;
+      return `<li class="${cls}"><span>${escapeHtml(what)}${why ? `<span class="sub">${escapeHtml(why)}</span>` : ""}</span></li>`;
+    }).join("");
+    const sql = d.sql_queries.length ? d.sql_queries[d.sql_queries.length - 1] : "";
+    const seconds = (d.total_latency_ms / 1000).toFixed(1);
+    const corrections = d.failed_attempts ? ` · ${d.failed_attempts} fixed along the way` : "";
+
+    $("result").innerHTML = `
+      ${d.succeeded ? "" : `<div class="notice">It could not finish this one. Try asking more specifically, or naming the table.</div>`}
+      <p class="answer">${markNumbers(d.answer)}</p>
+      <div class="meta">${calls.length} steps · ${seconds}s${corrections}</div>
+      ${d.result ? `<div class="subhead">The numbers behind it</div>${gridHtml(d.result)}` : ""}
+      <details class="block"${d.succeeded ? "" : " open"}>
+        <summary>How it got there</summary>
+        <ol class="steps">${steps}</ol>
+      </details>
+      ${sql ? `<details class="block"><summary>The SQL it wrote</summary>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <pre class="sql">${escapeHtml(sql)}</pre>
+          <div><button class="btn" type="button" id="copy-sql">Copy</button> <button class="btn" type="button" id="edit-sql">Open in "Run SQL yourself"</button></div>
+        </div></details>` : ""}`;
+    const copy = $("copy-sql");
+    if (copy) copy.onclick = async () => { await navigator.clipboard.writeText(sql).catch(() => {}); copy.textContent = "Copied"; };
+    const edit = $("edit-sql");
+    if (edit) edit.onclick = () => { $("sql").value = sql; $("sql").dataset.touched = "1"; $("sql-box").open = true; $("sql").focus(); };
+  }
+
+  async function ask(question) {
+    question = question.trim();
+    if (!question || state.busy) return;
+    state.busy = true; renderAsk();
+    $("result").innerHTML = `<div class="working"><span class="spinner"></span>Working it out: reading the tables, writing and running SQL… usually 10–40 seconds.</div>`;
+    try { renderAnswer(await post("/ask", { question })); }
+    catch (err) { $("result").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; }
+    finally { state.busy = false; renderAsk(); $("question").focus(); }
+  }
+  $("ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("question").value); });
+  $("question").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("question").value); }
+  });
+  $("examples").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    $("question").value = b.textContent; ask(b.textContent);
+  });
+
+  // ---------- SQL yourself ----------
+
+  $("sql").addEventListener("input", () => { $("sql").dataset.touched = "1"; });
+  $("sql-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("sql-result").innerHTML = `<div class="working"><span class="spinner"></span>Running…</div>`;
+    try {
+      const d = await post("/sql", { sql: $("sql").value });
+      $("sql-result").innerHTML = `${gridHtml(d)}<div class="meta">${d.row_count.toLocaleString()} rows · ${d.elapsed_ms} ms${d.limit_applied ? " · a row limit was added automatically" : ""}</div>`;
+    } catch (err) { $("sql-result").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`; }
+  });
+
+  refresh().then(() => {
+    const q = new URLSearchParams(location.search).get("q");
+    if (q && state.status.has_key && state.tables.length) { $("question").value = q; ask(q); }
+  }).catch((err) => {
+    $("engine-text").textContent = "unavailable";
+    $("result").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+  });
+})();
+</script>
+</body>
+</html>

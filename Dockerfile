@@ -19,7 +19,10 @@ COPY scripts/ ./scripts/
 # starts with data already in place.
 RUN python scripts/build_warehouse.py
 
-RUN useradd --create-home --uid 1000 app && chown -R app:app /app
+# Uploaded tables live on their own volume (see docker-compose.yml), so they
+# survive rebuilds. The directory must exist in the image: a volume mounted
+# over a missing path comes up owned by root and the app could not write it.
+RUN mkdir -p /app/userdata     && useradd --create-home --uid 1000 app     && chown -R app:app /app
 USER app
 
 EXPOSE 8000

@@ -29,7 +29,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Lint
-        run: ruff check src eval scripts tests
+        run: ruff check src eval scripts tests app.py
 
       # The suite uses a scripted LLM and builds its own miniature warehouse,
       # so it needs no API key and never calls out to a model.
@@ -57,6 +57,14 @@ jobs:
 
       - name: Build warehouse
         run: python scripts/build_warehouse.py
+
+      # Needs the real warehouse, so it runs here rather than in the test job,
+      # where it would be skipped: the published evaluation ran on this exact
+      # system prompt, and it must not drift by accident.
+      - name: The evaluated prompt is unchanged
+        run: |
+          pip install pytest httpx
+          python -m pytest -q tests/test_api.py -k port_prompt_is_unchanged
 
       - name: Every gold query must still run and return rows
         run: |

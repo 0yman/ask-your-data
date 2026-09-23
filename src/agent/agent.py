@@ -26,7 +26,7 @@ from typing import Any
 from .config import Settings
 from .llm import LLMClient, Message, ToolCall
 from .tools import FINAL_ANSWER_TOOL, ToolBox
-from .warehouse import Warehouse
+from .warehouse import QueryResult, Warehouse
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,29 @@ written out. Never say "as shown above" - the user does not see the tables.
 
 FREE_DAYS = 5
 
+# For the user's own tables. Same working rules as the port prompt, minus the
+# business rules - which describe the port warehouse and would only mislead
+# the model about anyone else's data.
+GENERIC_PROMPT_TEMPLATE = """You are a data analyst. You answer questions by querying a DuckDB database of tables the user uploaded from their own spreadsheets, and you answer ONLY from what the queries return.
+
+## Schema
+
+{schema}
+
+## About this data
+
+- Each table came from one uploaded CSV or Excel file and is named after it.
+- Column names come from the file's header row. Values may be messy: check with `sample_rows` before filtering on a text column, since spelling and capitalisation vary.
+- Nothing is known about how the tables relate. Only join them if the columns clearly match, and say so in your answer when you do.
+
+## How to work
+
+1. If you are unsure what a column contains, use `describe_table` or `sample_rows` before writing SQL. Guessing a column name wastes a turn.
+2. Write ONE SELECT at a time with `run_sql`. Aggregate in SQL rather than pulling rows back and counting them yourself.
+3. If a query fails, read the error, fix the query, and try again.
+4. When you have the numbers, call `final_answer` with the actual figures written out. Never say "as shown above" - the user does not see the tables.
+5. If the data genuinely cannot answer the question, say so in `final_answer` and explain what is missing. Do not invent a number."""
+
 
 @dataclass(slots=True)
 class Step:
@@ -86,6 +109,9 @@ class AgentResult:
     total_latency_ms: float
     usage: dict[str, int]
     failed_attempts: int = 0
+    #: The rows behind the answer - the last query that ran successfully - so
+    #: a person can check the figures rather than take the prose on trust.
+    last_result: QueryResult | None = None
 
     @property
     def final_sql(self) -> str | None:
@@ -113,19 +139,28 @@ def _short_args(arguments: dict[str, Any], width: int = 90) -> str:
 
 class PortAnalystAgent:
     def __init__(
-        self, warehouse: Warehouse, llm: LLMClient | None, settings: Settings
+        self,
+        warehouse: Warehouse,
+        llm: LLMClient | None,
+        settings: Settings,
+        domain: str = "port",
     ) -> None:
         self.warehouse = warehouse
         self.settings = settings
+        self.domain = domain
         self._llm = llm
         schema = (
             warehouse.schema_summary()
             if settings.include_schema_in_prompt
             else "(Not provided. Use list_tables and describe_table to discover it.)"
         )
-        self._system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-            schema=schema, free_days=FREE_DAYS
-        )
+        if domain == "port":
+            # Kept byte-for-byte: the published evaluation ran on this text.
+            self._system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+                schema=schema, free_days=FREE_DAYS
+            )
+        else:
+            self._system_prompt = GENERIC_PROMPT_TEMPLATE.format(schema=schema)
 
     @property
     def llm(self) -> LLMClient:
@@ -244,6 +279,7 @@ class PortAnalystAgent:
             total_latency_ms=(time.perf_counter() - started) * 1000,
             usage=usage,
             failed_attempts=failed_attempts,
+            last_result=toolbox.executed_queries[-1] if toolbox.executed_queries else None,
         )
 
 
@@ -254,15 +290,21 @@ def _last_error(messages: list[Message]) -> str:
     return "unknown"
 
 
-def build_agent(settings: Settings, llm: LLMClient | None = None) -> PortAnalystAgent:
-    """Construct an agent. The LLM client is left unbuilt unless one is given,
-    so this succeeds - and the schema and SQL tools work - without an API key."""
+def build_agent(
+    settings: Settings, llm: LLMClient | None = None, dataset: str = "sample"
+) -> PortAnalystAgent:
+    """Construct an agent over the sample warehouse or the user's own tables.
+
+    The LLM client is left unbuilt unless one is given, so this succeeds - and
+    the schema and SQL tools work - without an API key.
+    """
+    path = settings.db_path if dataset == "sample" else settings.user_db_path
     warehouse = Warehouse(
-        settings.db_path,
+        path,
         max_rows=settings.max_rows,
         timeout_seconds=settings.query_timeout_seconds,
     )
-    return PortAnalystAgent(warehouse, llm, settings)
+    return PortAnalystAgent(warehouse, llm, settings, domain="port" if dataset == "sample" else "user")
 
 
 __all__ = ["AgentResult", "PortAnalystAgent", "Step", "ToolCall", "build_agent"]

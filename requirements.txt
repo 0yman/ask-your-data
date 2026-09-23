@@ -2,6 +2,8 @@ duckdb>=1.0
 sqlglot>=25.0
 google-genai>=1.0
 openai>=1.40             # only used with AGENT_LLM_BACKEND=openai
+python-multipart>=0.0.9  # file uploads
+openpyxl>=3.1           # reading Excel files
 pydantic>=2.6
 pydantic-settings>=2.2
 fastapi>=0.110

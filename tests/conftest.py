@@ -78,10 +78,13 @@ def tiny_db(tmp_path_factory) -> Path:
 
 
 @pytest.fixture
-def settings(tiny_db: Path) -> Settings:
+def settings(tiny_db: Path, tmp_path: Path) -> Settings:
     return get_settings(
         llm_backend="scripted",
         db_path=tiny_db,
+        user_db_path=tmp_path / "my_data.duckdb",
+        uploads_dir=tmp_path / "uploads",
+        state_path=tmp_path / "app_state.json",
         max_steps=6,
         max_sql_retries=2,
         max_rows=100,
