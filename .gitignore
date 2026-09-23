@@ -17,3 +17,6 @@ data/*.duckdb.wal
 # Your uploaded files and app state stay on your machine.
 data/uploads/
 data/app_state.json
+
+# Downloaded by eval/user_data/run.py; public but large.
+data/user_eval/

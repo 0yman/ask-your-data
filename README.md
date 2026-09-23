@@ -309,6 +309,41 @@ probes each, on the free tier, the day this was run:
 The newest model was entirely unavailable. Picking by version number would
 have produced a project that does not run.
 
+### On real data it has never seen
+
+The numbers above are on the synthetic port warehouse, with a prompt that
+carries its business rules. `eval/user_data/run.py` tests the other path — the
+one a user takes: real public spreadsheets uploaded through the importer, the
+general prompt, no domain hints.
+
+- **UCI Online Retail** — 541,909 real transactions, as Excel. Returns are
+  negative rows, cancellations are `C`-prefixed invoices, 25% of rows have no
+  customer.
+- **Our World in Data CO2** — 79 columns per country and year, where "World",
+  continents and income groups share the `country` column with real countries.
+
+Seventeen questions: eight plain, six **traps** where the obvious query is wrong
+(summing every row for "global emissions" gives 226,123 Mt instead of 35,158;
+ignoring returns crowns a product whose one huge order was sent back), and
+three the data cannot answer.
+
+| | Correct |
+|---|---|
+| Plain | 8 / 8 |
+| Traps | 6 / 6 |
+| Unanswerable, correctly declined | 3 / 3 |
+
+Every answer was also read by hand alongside its SQL, because a perfect score
+is a reason to suspect the grader first. They were right for the right
+reasons — with one caveat the score hides. To leave out the non-country rows,
+the agent **typed lists of names** (`'World', 'Asia', 'High-income countries',
+…`) instead of using the robust rule, `iso_code IS NOT NULL`. Its lists were
+incomplete — `European Union (27)` and `OECD (GCP)` are missing — and it passed
+only because no omitted row affected those two questions. Right answers, fragile
+method: exactly the kind of thing the "The SQL it wrote" panel is there to show.
+
+Full answers: [`eval/user_data/results.md`](eval/user_data/results.md).
+
 ### Reproduce
 
 ```bash
@@ -316,6 +351,7 @@ make eval                                             # full run, needs a key
 python eval/run_eval.py --limit 5                     # quick pass, saves quota
 python eval/run_eval.py --no-schema-prompt            # the ablation above
 python eval/run_eval.py --rescore eval/results.json   # re-score, no model calls
+python eval/user_data/run.py                          # real public data (downloads ~40 MB)
 ```
 
 `--rescore` recomputes every metric from a previous run's stored SQL. Scoring
@@ -435,10 +471,10 @@ invalidate the reported accuracy fails the build instead.
   no real terminal's data was used.
 - **One model, one run.** No temperature sweep, no repeated trials, so the
   numbers carry no variance estimate.
-- **The evaluation covers the sample data only.** Questions about your own
-  files use a general prompt with none of the sample's business rules, and no
-  benchmark has been run on that path. The result table and the SQL are shown
-  with every answer precisely so you can check it.
+- **The "My files" evaluation is small.** 17 questions over two datasets,
+  one run, written by the same person who built the agent (though knowing the
+  traps in advance, not hinting at them). See the section above for what it
+  does and does not show.
 - **Tables are not linked.** Uploaded files become independent tables; the
   agent only joins them when the column names clearly match, and says so.
 

@@ -1,0 +1,17 @@
+{"id": "r1", "dataset": "retail", "kind": "plain", "question": "How many different countries do customers come from?", "accept_numbers": [38]}
+{"id": "r2", "dataset": "retail", "kind": "plain", "question": "Which country has the most distinct customers?", "accept_text": ["united kingdom"]}
+{"id": "r3", "dataset": "retail", "kind": "plain", "question": "What share of the sales rows have no customer ID?", "accept_numbers": [24.93], "tolerance": 0.01}
+{"id": "r4", "dataset": "retail", "kind": "trap", "trap": "returns and cancellations are negative rows; summing everything gives net, not sales", "question": "What was the total revenue from sales, not counting returns or cancelled orders?", "accept_numbers": [10644560.42], "tolerance": 0.01, "trap_numbers": [9747747.93]}
+{"id": "r5", "dataset": "retail", "kind": "trap", "trap": "one order of 80,995 units was fully returned; ignoring returns crowns the wrong product", "question": "Which product had the highest net number of units sold, after subtracting returns?", "accept_text": ["world war 2 gliders"], "trap_text": ["paper craft"]}
+{"id": "r6", "dataset": "retail", "kind": "plain", "question": "Which month had the highest sales?", "accept_text": ["november 2011", "2011-11", "nov 2011", "11/2011"]}
+{"id": "r7", "dataset": "retail", "kind": "plain", "question": "Outside the United Kingdom, which country generated the most revenue?", "accept_text": ["netherlands"]}
+{"id": "r8", "dataset": "retail", "kind": "unanswerable", "question": "What is the average age of the customers?"}
+{"id": "r9", "dataset": "retail", "kind": "unanswerable", "question": "What was the profit margin on each product?"}
+{"id": "c1", "dataset": "co2", "kind": "trap", "trap": "'World', continents and income groups sit in the country column and outrank every real country", "question": "Which country emitted the most CO2 in 2022?", "accept_text": ["china"], "trap_text": ["world", "non-oecd"]}
+{"id": "c2", "dataset": "co2", "kind": "trap", "trap": "summing every row counts World, continents and groups too - 6.4x too high", "question": "What were total global CO2 emissions in 2020, in million tonnes?", "accept_numbers": [35158.23], "tolerance": 0.015, "trap_numbers": [226123.2]}
+{"id": "c3", "dataset": "co2", "kind": "plain", "question": "Which country had the highest CO2 emissions per person in 2022?", "accept_text": ["qatar"]}
+{"id": "c4", "dataset": "co2", "kind": "plain", "question": "By what percentage did India's CO2 emissions grow between 2000 and 2022?", "accept_numbers": [186.8], "tolerance": 0.01}
+{"id": "c5", "dataset": "co2", "kind": "plain", "question": "In which year did United States CO2 emissions peak?", "accept_numbers": [2005], "tolerance": 0.0, "trap_numbers": [2007]}
+{"id": "c6", "dataset": "co2", "kind": "trap", "trap": "the answer needs the aggregate rows - but 'Asia (GCP)' is a different, smaller Asia", "question": "Which continent emitted the most CO2 in 2022, and how much?", "accept_numbers": [22237.812], "tolerance": 0.01, "trap_numbers": [19455.877]}
+{"id": "c7", "dataset": "co2", "kind": "trap", "trap": "comparing against every row also counts groups like 'High-income countries'", "question": "How many countries had higher CO2 emissions per person than the United States in 2022?", "accept_numbers": [10], "tolerance": 0.0}
+{"id": "c8", "dataset": "co2", "kind": "unanswerable", "question": "What were Egypt's methane emissions from rice farming in 2020?"}
