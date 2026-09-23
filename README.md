@@ -10,6 +10,10 @@ Try it on the built-in sample (three years of a container port's operations),
 on two real public datasets (a UK online shop's 541,909 sales, and CO₂
 emissions by country), or drop in your own CSV and Excel files.
 
+**Try it live: [ask-your-data-i67m.onrender.com](https://ask-your-data-i67m.onrender.com)**,
+with nothing to install and no key needed. The first visit after a quiet spell can take
+about a minute while the free server wakes up.
+
 ![Asking about an uploaded Excel file: a written answer with its figures highlighted, and the table of results behind it](docs/screenshot.png)
 
 ---
