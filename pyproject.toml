@@ -1,5 +1,5 @@
 [project]
-name = "port-analyst-agent"
+name = "ask-your-data"
 version = "1.0.0"
 description = "A tool-calling agent that answers analytical questions by writing guarded, read-only SQL against a DuckDB star schema"
 readme = "README.md"
