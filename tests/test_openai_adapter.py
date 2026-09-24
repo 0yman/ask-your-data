@@ -177,7 +177,9 @@ class TestModelFallback:
         })
         llm._model = "main"
         llm.last_model = "main"
-        llm._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        llm._client = client
+        llm._routes = [(client, "main")] + [(client, m) for m in fallbacks]
         return llm, tried
 
     def test_a_rate_limited_model_hands_over_at_once(self, settings):
@@ -216,3 +218,51 @@ def test_backoff_never_waits_longer_than_the_cap():
 
     assert backoff_delay(2.0, 0) < 2.6
     assert all(backoff_delay(2.0, attempt) <= MAX_BACKOFF_SECONDS * 1.25 for attempt in range(20))
+
+
+def test_a_backup_host_answers_when_the_main_host_is_busy(settings, monkeypatch):
+    """Cerebras first, Groq behind it: two hosts, two quotas, one conversation."""
+    import openai
+
+    from agent.llm import OpenAICompatibleLLM
+
+    made = {}
+
+    class FakeOpenAI:
+        def __init__(self, api_key, base_url, timeout, max_retries):
+            made[base_url] = self
+            self.calls = []
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+            self.base_url = base_url
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs["model"])
+            if "main-host" in self.base_url:
+                raise RuntimeError("429 rate limit reached: requests per minute")
+            return fake_response(content=f"from {kwargs['model']}")
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    llm = OpenAICompatibleLLM(settings.model_copy(update={
+        "llm_backend": "openai", "openai_api_key": "k1",
+        "openai_base_url": "https://main-host/v1", "openai_model": "qwen-main",
+        "openai_backup_api_key": "k2", "openai_backup_base_url": "https://backup-host/v1",
+        "openai_backup_model": "qwen-backup",
+    }))
+    response = llm.complete("sys", [Message(role="user", content="q")], [])
+    assert response.text == "from qwen-backup"
+    assert made["https://main-host/v1"].calls == ["qwen-main"]
+    assert made["https://backup-host/v1"].calls == ["qwen-backup"]
+    assert llm.last_model == "qwen-backup"
+
+
+def test_without_a_backup_key_there_is_no_backup_route(settings, monkeypatch):
+    import openai
+
+    from agent.llm import OpenAICompatibleLLM
+
+    monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: SimpleNamespace())
+    llm = OpenAICompatibleLLM(settings.model_copy(update={
+        "llm_backend": "openai", "openai_api_key": "k1", "openai_model": "m",
+        "openai_backup_model": "other",  # a model but no key: not a route
+    }))
+    assert [model for _, model in llm._routes] == ["m"]

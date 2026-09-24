@@ -200,8 +200,9 @@ def _client_address(request: Request) -> str:
 def _engine_label(settings: Settings) -> str:
     if settings.llm_backend == "openai":
         model = settings.openai_model.split("/")[-1]
-        if "groq.com" in settings.openai_base_url:
-            return f"Groq · {model}"
+        for marker, host in (("groq.com", "Groq"), ("cerebras.ai", "Cerebras")):
+            if marker in settings.openai_base_url:
+                return f"{host} · {model}"
         return model if settings.openai_base_url else f"OpenAI · {model}"
     if settings.llm_backend == "gemini":
         return "Google Gemini"

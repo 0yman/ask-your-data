@@ -202,15 +202,29 @@ class OpenAICompatibleLLM(LLMClient):
             raise RuntimeError("The OpenAI SDK is not installed: pip install openai") from exc
 
         self._settings = settings
-        self._client = OpenAI(
-            api_key=api_key,
-            base_url=settings.openai_base_url or None,
-            timeout=settings.request_timeout_ms / 1000,
-            # One retry layer, for the same reason as the Gemini client: the
-            # backoff below is the one that knows the agent's step budget.
-            max_retries=0,
-        )
+
+        def client(key: str, base_url: str):
+            return OpenAI(
+                api_key=key,
+                base_url=base_url or None,
+                timeout=settings.request_timeout_ms / 1000,
+                # One retry layer, for the same reason as the Gemini client:
+                # the backoff below is the one that knows the step budget.
+                max_retries=0,
+            )
+
+        self._client = client(api_key, settings.openai_base_url)
         self._model = settings.openai_model
+        # Where to send a call, in order: the main model, other models on the
+        # same host (each has its own quota on Groq), then a backup host.
+        self._routes = [(self._client, self._model)] + [
+            (self._client, m) for m in settings.openai_fallback_models if m != self._model
+        ]
+        if settings.openai_backup_api_key and settings.openai_backup_model:
+            self._routes.append((
+                client(settings.openai_backup_api_key, settings.openai_backup_base_url),
+                settings.openai_backup_model,
+            ))
         self.name = self._model
         self.last_model = self._model
 
@@ -239,19 +253,20 @@ class OpenAICompatibleLLM(LLMClient):
         return _from_openai(self._call_with_retry(kwargs))
 
     def _call_with_retry(self, kwargs: dict[str, Any]):
-        """Try each model in turn; back off only when all of them are busy.
+        """Try each route in turn; back off only when all of them are busy.
 
-        Rate limits on hosts like Groq are per model, so a second model is a
-        second quota: when the first is out of tokens for the minute - or the
-        day - the next answers at once instead of the visitor waiting.
+        Free tiers ration per model and per host, so every route is a
+        separate quota: when the first is out of tokens for the minute - or
+        the day - the next answers at once instead of the visitor waiting.
+        Routes serve the same wire format, so a conversation can move between
+        them mid-question.
         """
         settings = self._settings
-        models = [self._model] + [m for m in settings.openai_fallback_models if m != self._model]
         last: Exception | None = None
         for attempt in range(settings.max_retries):
-            for model in models:
+            for client, model in self._routes:
                 try:
-                    response = self._client.chat.completions.create(**{**kwargs, "model": model})
+                    response = client.chat.completions.create(**{**kwargs, "model": model})
                     self.last_model = model
                     return response
                 except Exception as exc:
@@ -264,8 +279,11 @@ class OpenAICompatibleLLM(LLMClient):
             # A per-minute token limit says exactly how long to wait: waiting
             # less spends a retry, waiting more keeps a visitor staring.
             server = _retry_after(last)
-            delay = min(server + random.uniform(0.5, 1.5), MAX_BACKOFF_SECONDS) if server                 else backoff_delay(settings.retry_base_delay, attempt)
-            logger.warning("All models busy; retrying in %.1fs", delay)
+            if server:
+                delay = min(server + random.uniform(0.5, 1.5), MAX_BACKOFF_SECONDS)
+            else:
+                delay = backoff_delay(settings.retry_base_delay, attempt)
+            logger.warning("All routes busy; retrying in %.1fs", delay)
             time.sleep(delay)
         assert last is not None
         raise last

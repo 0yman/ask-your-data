@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # Groq each model has its own quota, so this multiplies capacity.
     # From the environment as JSON: AGENT_OPENAI_FALLBACK_MODELS='["qwen/qwen3.8-27b"]'
     openai_fallback_models: list[str] = []
+    # A second OpenAI-format host, tried after every model on the first.
+    # The live demo: Cerebras first, Groq behind it, the same Qwen on both.
+    openai_backup_base_url: str = ""
+    openai_backup_api_key: str | None = Field(default=None, alias="OPENAI_BACKUP_API_KEY")
+    openai_backup_model: str = ""
     # Chosen by measurement, not by version number: on the free tier the
     # larger flash models are frequently 503 "high demand", while flash-lite
     # answered 3 probes in 4 at roughly a fifth of the latency. See the README.
