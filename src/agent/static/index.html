@@ -585,7 +585,8 @@
     const corrections = d.failed_attempts ? ` · ${d.failed_attempts} fixed along the way` : "";
 
     $("result").innerHTML = `
-      ${d.succeeded ? "" : `<div class="notice">It could not finish this one. Try asking more specifically, or naming the table.</div>`}
+      ${d.stop_reason === "partial_answer" ? `<div class="notice">Part of this could not be worked out, so the answer uses the queries that did. Ask about the rest separately for more.</div>`
+        : d.succeeded ? "" : `<div class="notice">It could not finish this one. Try asking more specifically, or one part at a time.</div>`}
       <p class="answer">${markNumbers(d.answer)}</p>
       <div class="meta">${calls.length} steps · ${seconds}s${corrections}</div>
       ${d.result ? `<div class="subhead">The numbers behind it</div>${gridHtml(d.result)}` : ""}

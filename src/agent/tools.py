@@ -112,6 +112,20 @@ TOOL_SPECS: list[ToolSpec] = [
 
 FINAL_ANSWER_TOOL = "final_answer"
 
+# Characters of query result handed to the model per call (about 1.5K tokens).
+MAX_RESULT_CHARS = 6000
+# A failing query longer than this many lines gets a hint to split the work.
+LONG_QUERY_LINES = 15
+
+
+def _split_hint(sql: Any) -> str:
+    if str(sql).count("\n") + 1 < LONG_QUERY_LINES:
+        return ""
+    return (
+        "\n\nThis query is long. Split the question into smaller queries, one "
+        "per part - results of queries that already worked are kept."
+    )
+
 
 @dataclass
 class ToolBox:
@@ -209,7 +223,7 @@ class ToolBox:
             result = self.warehouse.run_sql(str(sql))
         except UnsafeSQLError as exc:
             return ToolOutcome(
-                content=f"Query rejected: {exc}", ok=False, error_kind="unsafe_sql"
+                content=f"Query rejected: {exc}{_split_hint(sql)}", ok=False, error_kind="unsafe_sql"
             )
         except QueryTimeout as exc:
             return ToolOutcome(content=str(exc), ok=False, error_kind="timeout")
@@ -217,7 +231,7 @@ class ToolBox:
             # Genuine SQL errors - a wrong column, a bad join - land here and
             # are the most valuable thing the agent can be told.
             return ToolOutcome(
-                content=f"SQL error: {exc}\n\nCheck the schema and try again.",
+                content=f"SQL error: {exc}\n\nCheck the schema and try again.{_split_hint(sql)}",
                 ok=False,
                 error_kind="sql_error",
             )
@@ -228,7 +242,21 @@ class ToolBox:
             header += f" (a LIMIT {self.warehouse.max_rows} was added automatically)"
         if result.truncated:
             header += " — results were truncated; aggregate instead of listing"
-        return ToolOutcome(
-            content=f"{header}\n\n{result.to_markdown(max_rows=self.max_rows_to_model)}",
-            result=result,
-        )
+        return ToolOutcome(content=f"{header}\n\n{self._table(result)}", result=result)
+
+    def _table(self, result: QueryResult) -> str:
+        """The rows the model reads, within a size budget.
+
+        Thirty rows of a narrow aggregate are small; thirty rows of a 79-column
+        `SELECT *` are tens of thousands of characters - more than a free-tier
+        host accepts in one request. Rows are dropped until it fits."""
+        rows = self.max_rows_to_model
+        text = result.to_markdown(max_rows=rows)
+        while len(text) > MAX_RESULT_CHARS and rows > 3:
+            rows = max(3, rows // 2)
+            text = result.to_markdown(max_rows=rows)
+        if len(text) > MAX_RESULT_CHARS:
+            text = text[:MAX_RESULT_CHARS] + "\n(... cut short)"
+        if rows < min(self.max_rows_to_model, result.row_count):
+            text += f"\n(showing {rows} rows to save space - select fewer columns, or aggregate)"
+        return text

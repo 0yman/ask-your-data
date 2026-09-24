@@ -521,7 +521,10 @@ def ask(body: AskRequest, request: Request, session: Session = Depends(current_s
         except Exception as exc:
             logger.warning("Ask failed: %s", exc)
             message = str(exc).lower()
-            if "503" in message or "unavailable" in message or "429" in message or "exhausted" in message:
+            if "413" in message or "request too large" in message:
+                detail = ("This question needed more working space than the free model allows. "
+                          "Try asking about one part of it at a time.")
+            elif "503" in message or "unavailable" in message or "429" in message or "exhausted" in message:
                 detail = "Google's free AI model is overloaded right now. Wait a minute and ask again."
             elif "api key" in message or "403" in message or "401" in message:
                 detail = "The API key was rejected. Add it again using the key button at the top."

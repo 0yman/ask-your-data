@@ -243,3 +243,101 @@ def test_a_second_empty_turn_is_not_nudged_forever(settings, warehouse):
     result = PortAnalystAgent(warehouse, llm, settings).ask("How many berths?")
     assert result.stop_reason == "text_answer"
     assert len(llm.calls) == 2
+
+
+class _Recording:
+    """A scripted model that also records the tools and messages it was sent."""
+
+    def __init__(self, responses, fail_first_with=None):
+        self.name = "recording"
+        self.responses = list(responses)
+        self.sent = []
+        self.fail_first_with = fail_first_with
+
+    def complete(self, system, messages, tools):
+        self.sent.append((list(messages), [t.name for t in tools]))
+        if self.fail_first_with:
+            error, self.fail_first_with = self.fail_first_with, None
+            raise RuntimeError(error)
+        from agent.llm import LLMResponse
+        return self.responses.pop(0) if self.responses else LLMResponse(text="done")
+
+
+def _sql(query):
+    from agent.llm import LLMResponse, ToolCall
+    return LLMResponse(tool_calls=[ToolCall("run_sql", {"sql": query})])
+
+
+BROKEN = "SELECT nope\nFROM dim_berth"
+
+
+class TestNoWorkIsThrownAway:
+    def test_after_too_many_failures_it_answers_from_the_queries_that_worked(self, settings, warehouse):
+        from agent.agent import SALVAGE_NUDGE, PortAnalystAgent
+        from agent.llm import LLMResponse, ToolCall
+
+        llm = _Recording([
+            _sql("SELECT COUNT(*) AS berths FROM dim_berth"),
+            *[_sql(BROKEN) for _ in range(settings.max_sql_retries + 1)],
+            LLMResponse(tool_calls=[ToolCall("final_answer", {"answer": "3 berths; the rest could not be computed."})]),
+        ])
+        result = PortAnalystAgent(warehouse, llm, settings).ask("Tell me everything about berths")
+        assert result.stop_reason == "partial_answer"
+        assert result.succeeded
+        assert result.answer.startswith("3 berths")
+        last_messages, last_tools = llm.sent[-1]
+        assert last_tools == ["final_answer"]           # no more queries allowed
+        assert last_messages[-1].content == SALVAGE_NUDGE
+
+    def test_with_nothing_that_worked_it_says_so_and_suggests_splitting(self, settings, warehouse):
+        from agent.agent import PortAnalystAgent
+
+        llm = _Recording([_sql(BROKEN) for _ in range(settings.max_sql_retries + 1)])
+        result = PortAnalystAgent(warehouse, llm, settings).ask("q")
+        assert result.stop_reason == "too_many_failures"
+        assert not result.succeeded
+        assert "one part of the question at a time" in result.answer
+
+
+class TestContextStaysSmall:
+    def test_older_failed_queries_are_replaced_but_the_newest_stays(self, settings, warehouse):
+        from agent.agent import FAILED_SQL_PLACEHOLDER, PortAnalystAgent
+
+        llm = _Recording([_sql(BROKEN + " -- first"), _sql(BROKEN + " -- second")])
+        PortAnalystAgent(warehouse, llm, settings).ask("q")
+        third_call_messages = llm.sent[2][0]
+        sqls = [c.arguments["sql"] for m in third_call_messages if m.role == "assistant" for c in m.tool_calls]
+        assert sqls == [FAILED_SQL_PLACEHOLDER, BROKEN + " -- second"]
+
+    def test_a_request_too_large_is_retried_once_trimmed(self, settings, warehouse):
+        from agent.agent import PortAnalystAgent
+        from agent.llm import LLMResponse, ToolCall
+
+        llm = _Recording(
+            [LLMResponse(tool_calls=[ToolCall("final_answer", {"answer": "ok"})])],
+            fail_first_with="Error code: 413 - Request too large for model",
+        )
+        result = PortAnalystAgent(warehouse, llm, settings).ask("q")
+        assert result.answer == "ok"
+        assert len(llm.sent) == 2
+
+    def test_a_wide_result_is_cut_to_fit(self, warehouse):
+        from agent.tools import MAX_RESULT_CHARS, ToolBox
+
+        wide = ", ".join(f"repeat('x', 30) AS c{i}" for i in range(40))
+        outcome = ToolBox(warehouse=warehouse, max_rows_to_model=30).dispatch(
+            "run_sql", {"sql": f"SELECT {wide} FROM range(50)"}
+        )
+        assert outcome.ok
+        assert len(outcome.content) < MAX_RESULT_CHARS + 400
+        assert "select fewer columns" in outcome.content or "cut short" in outcome.content
+
+    def test_a_long_failing_query_is_told_to_split_the_work(self, warehouse):
+        from agent.tools import ToolBox
+
+        long_sql = "SELECT\n" + "\n".join(f"  nope_{i}," for i in range(20)) + "\n  1\nFROM dim_berth"
+        outcome = ToolBox(warehouse=warehouse, max_rows_to_model=30).dispatch("run_sql", {"sql": long_sql})
+        assert not outcome.ok
+        assert "Split the question into smaller queries" in outcome.content
+        short = ToolBox(warehouse=warehouse, max_rows_to_model=30).dispatch("run_sql", {"sql": BROKEN})
+        assert "Split" not in short.content

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .config import Settings
@@ -87,6 +87,22 @@ GENERIC_PROMPT_TEMPLATE = """You are a data analyst. You answer questions by que
 3. If a query fails, read the error, fix the query, and try again.
 4. When you have the numbers, call `final_answer` with the actual figures written out. Never say "as shown above" - the user does not see the tables.
 5. If the data genuinely cannot answer the question, say so in `final_answer` and explain what is missing. Do not invent a number."""
+
+
+# Sent when failures or the step budget stop the loop but some queries did
+# work. Answering from those beats discarding them: a broad question that
+# needed five queries and got three still deserves the three.
+SALVAGE_NUDGE = (
+    "You cannot run any more queries. Answer the question now with the "
+    "final_answer tool, using only the results of the queries that succeeded "
+    "above. Say plainly which parts of the question you could not compute."
+)
+
+# Stand-in for the SQL of a failed attempt once a later attempt exists. The
+# error stays, the 30-line query goes: retries otherwise grow the context
+# until a host with a small per-request limit (Groq's free tier: 7K tokens)
+# refuses the whole question.
+FAILED_SQL_PLACEHOLDER = "(failed query omitted to save space - see the error below)"
 
 
 # Sent once when the model returns an empty turn. Not part of the system
@@ -201,10 +217,11 @@ class PortAnalystAgent:
         stop_reason = "max_steps"
         failed_attempts = 0
         nudged = False
+        failed_ids: set[str] = set()
 
         for index in range(1, settings.max_steps + 1):
             step_started = time.perf_counter()
-            response = self.llm.complete(self._system_prompt, messages, toolbox.specs)
+            response = self._complete(messages, toolbox.specs, failed_ids)
             step = Step(
                 index=index,
                 text=response.text,
@@ -250,6 +267,7 @@ class PortAnalystAgent:
                 outcome = toolbox.dispatch(call.name, call.arguments)
                 if not outcome.ok:
                     failed_attempts += 1
+                    failed_ids.add(call.id)
                 step.tool_calls.append(
                     {
                         "name": call.name,
@@ -273,18 +291,24 @@ class PortAnalystAgent:
 
             if failed_attempts > settings.max_sql_retries:
                 stop_reason = "too_many_failures"
-                answer = (
-                    f"I could not produce a working query after "
-                    f"{failed_attempts} failed attempts. The last error was: "
-                    f"{_last_error(messages)}"
-                )
                 break
 
         if answer is None:
-            answer = (
-                f"I ran out of steps ({settings.max_steps}) before reaching an "
-                "answer. The question may need to be narrowed."
-            )
+            salvaged = self._salvage(messages, toolbox, failed_ids, steps, usage)
+            if salvaged is not None:
+                answer, stop_reason = salvaged, "partial_answer"
+            elif stop_reason == "too_many_failures":
+                answer = (
+                    f"I could not produce a working query after "
+                    f"{failed_attempts} failed attempts. The last error was: "
+                    f"{_last_error(messages)}\n\nTry asking about one part of the "
+                    "question at a time."
+                )
+            else:
+                answer = (
+                    f"I ran out of steps ({settings.max_steps}) before reaching an "
+                    "answer. The question may need to be narrowed."
+                )
 
         return AgentResult(
             question=question,
@@ -292,12 +316,88 @@ class PortAnalystAgent:
             steps=steps,
             sql_queries=[query.sql for query in toolbox.executed_queries],
             stop_reason=stop_reason,
-            succeeded=stop_reason in {"final_answer", "text_answer"},
+            succeeded=stop_reason in {"final_answer", "text_answer", "partial_answer"},
             total_latency_ms=(time.perf_counter() - started) * 1000,
             usage=usage,
             failed_attempts=failed_attempts,
             last_result=toolbox.executed_queries[-1] if toolbox.executed_queries else None,
         )
+
+
+    # --- keeping the context small -------------------------------------------
+
+    def _complete(self, messages: list[Message], specs, failed_ids: set[str]):
+        """One model call, sent with failed attempts compacted.
+
+        If the host still refuses the request as too large, retry once with
+        every tool result cut short - the last chance before the question
+        fails for reasons the visitor cannot see.
+        """
+        compact = _compact(messages, failed_ids)
+        try:
+            return self.llm.complete(self._system_prompt, compact, specs)
+        except Exception as exc:
+            if not _too_large(exc):
+                raise
+            logger.warning("Request too large for the model host; retrying trimmed")
+            return self.llm.complete(self._system_prompt, _compact(messages, failed_ids, max_result_chars=1200), specs)
+
+    def _salvage(self, messages, toolbox: ToolBox, failed_ids, steps, usage) -> str | None:
+        """Ask for an answer from the queries that did work, if any did."""
+        if not toolbox.executed_queries:
+            return None
+        final_only = [spec for spec in toolbox.specs if spec.name == FINAL_ANSWER_TOOL]
+        request = messages + [Message(role="user", content=SALVAGE_NUDGE)]
+        started = time.perf_counter()
+        try:
+            response = self._complete(request, final_only, failed_ids)
+        except Exception as exc:
+            logger.warning("Salvage call failed: %s", exc)
+            return None
+        step = Step(index=len(steps) + 1, text=response.text,
+                    latency_ms=(time.perf_counter() - started) * 1000, usage=response.usage)
+        for key, value in response.usage.items():
+            usage[key] = usage.get(key, 0) + value
+        answer = None
+        for call in response.tool_calls:
+            if call.name == FINAL_ANSWER_TOOL:
+                answer = str(call.arguments.get("answer", "")).strip()
+                step.tool_calls.append({"name": call.name, "arguments": call.arguments, "ok": True})
+                break
+        answer = answer or (response.text or "").strip() or None
+        steps.append(step)
+        return answer
+
+
+def _compact(messages: list[Message], failed_ids: set[str], max_result_chars: int | None = None) -> list[Message]:
+    """The conversation as sent: failed SQL replaced by a placeholder once a
+    later attempt exists (the newest failure stays whole, so the model can
+    fix it), and optionally every tool result cut to `max_result_chars`."""
+    latest_failure = None
+    for message in reversed(messages):
+        if message.role == "assistant" and any(c.id in failed_ids for c in message.tool_calls):
+            latest_failure = message
+            break
+    out = []
+    for message in messages:
+        if message.role == "assistant" and message is not latest_failure and any(
+            c.id in failed_ids for c in message.tool_calls
+        ):
+            calls = [
+                replace(c, arguments={"sql": FAILED_SQL_PLACEHOLDER})
+                if c.id in failed_ids and c.name == "run_sql" else c
+                for c in message.tool_calls
+            ]
+            message = replace(message, tool_calls=calls)
+        if max_result_chars and message.role == "tool" and message.content and len(message.content) > max_result_chars:
+            message = replace(message, content=message.content[:max_result_chars] + "\n(... cut short)")
+        out.append(message)
+    return out
+
+
+def _too_large(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "413" in text or "request too large" in text or "context length" in text or "too many tokens" in text
 
 
 def _last_error(messages: list[Message]) -> str:
