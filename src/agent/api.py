@@ -271,6 +271,10 @@ class AskResponse(BaseModel):
     usage: dict[str, int]
     result: dict[str, Any] | None = None
     model: str | None = None     # which model answered, as the picker names it
+    # A question split into parts: each part's question, answer, SQL and rows.
+    parts: list[dict[str, Any]] = []
+    # The verifier's verdict: {"ok", "problems", "redo", "guidance"}.
+    review: dict[str, Any] | None = None
 
 
 class SQLRequest(BaseModel):
@@ -678,6 +682,12 @@ def _run_question(session: Session, question: str, address: str, on_event=None) 
         usage=result.usage,
         result=_table_json(result.last_result),
         model=_engine(session),
+        parts=[
+            {"question": part["question"], "answer": part["answer"], "sql": part["sql"],
+             "stop_reason": part["stop_reason"], "result": _table_json(part["result"])}
+            for part in result.parts
+        ],
+        review=result.review,
     )
 
 

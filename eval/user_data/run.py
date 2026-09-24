@@ -86,8 +86,28 @@ def mentions_number(text: str, target: float, tolerance: float) -> bool:
     return False
 
 
+def meets(condition: dict[str, Any], answer: str) -> bool:
+    """One part of a multi-part answer: a name (any of several spellings)
+    or a figure within a relative tolerance. `abs` accepts either sign, for
+    "fell by 967.8" as well as "-967.8"."""
+    if "text" in condition:
+        return any(t in answer.lower() for t in condition["text"])
+    target, tolerance = condition["number"], condition.get("tolerance", 0.01)
+    if condition.get("abs"):
+        return any(
+            abs(abs(found) - abs(target)) <= tolerance * max(abs(target), 1.0) if tolerance else abs(found) == abs(target)
+            for found in numbers_in(answer)
+        )
+    return mentions_number(answer, target, tolerance)
+
+
 def grade(record: dict[str, Any], answer: str) -> dict[str, Any]:
     text = answer.lower()
+    if "all_of" in record:
+        # A multi-part question is right only when every part is.
+        parts = [meets(condition, answer) for condition in record["all_of"]]
+        return {"correct": all(parts), "fell_for_trap": False, "declined": looks_like_decline(answer),
+                "parts": f"{sum(parts)}/{len(parts)}"}
     if record["kind"] == "unanswerable":
         declined = looks_like_decline(answer)
         return {"correct": declined, "fell_for_trap": False, "declined": declined}
@@ -107,12 +127,14 @@ def grade(record: dict[str, Any], answer: str) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", help="Comma-separated question ids")
+    parser.add_argument("--questions", type=Path, default=HERE / "questions.jsonl",
+                        help="Question set: questions.jsonl (17) or hard_questions.jsonl (12)")
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--out", type=Path, default=HERE / "results.md")
     parser.add_argument("--json-out", type=Path, default=HERE / "results.json")
     args = parser.parse_args()
 
-    questions = [json.loads(line) for line in (HERE / "questions.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    questions = [json.loads(line) for line in args.questions.read_text(encoding="utf-8").splitlines() if line.strip()]
     if args.only:
         wanted = set(args.only.split(","))
         questions = [q for q in questions if q["id"] in wanted]
@@ -165,7 +187,7 @@ def main() -> int:
 
 def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_kind: dict[str, str] = {}
-    for kind in ("plain", "trap", "unanswerable"):
+    for kind in ("plain", "trap", "multi", "puzzle", "trick", "unanswerable"):
         group = [r for r in rows if r["kind"] == kind]
         if group:
             by_kind[kind] = f"{sum(r['correct'] for r in group)}/{len(group)}"

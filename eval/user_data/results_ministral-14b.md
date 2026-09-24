@@ -2,7 +2,7 @@
 
 Model: `ministral-14b-2512` · general prompt, no domain rules · 2026-09-24
 
-**14 / 17 correct** — plain: 8/8 · trap: 4/6 · unanswerable: 2/3
+**15 / 17 correct** — plain: 8/8 · trap: 4/6 · unanswerable: 3/3
 
 | id | kind | correct | fell for trap | steps | question | answer |
 |---|---|---|---|---|---|---|
@@ -22,4 +22,4 @@ Model: `ministral-14b-2512` · general prompt, no domain rules · 2026-09-24
 | c5 | plain | yes |  | 6 | In which year did United States CO2 emissions peak? | The United States' CO2 emissions peaked in the year **2005**, with emissions reaching **6,126.903 million tonnes**. This is the highest recorded value in the dataset for the United States. |
 | c6 | trap | yes |  | 5 | Which continent emitted the most CO2 in 2022, and how much? | In 2022, **Asia** emitted the most CO2 among continents, with a total of **22,237.812 million tonnes** of CO2 emissions. This is significantly higher than the next highest emitter, **North America**, which emitted 6,236. |
 | c7 | trap | yes |  | 4 | How many countries had higher CO2 emissions per person than the United States in 2022? | In 2022, **10 countries** had higher CO2 emissions per person than the United States, which had emissions of 14.8 metric tons per capita. |
-| c8 | unanswerable | **no** |  | 4 | What were Egypt's methane emissions from rice farming in 2020? | The dataset does not provide specific information about methane emissions from rice farming for Egypt in 2020. The table only includes total methane emissions, which for Egypt in 2020 is recorded as 46.511 (likely in mil |
+| c8 | unanswerable | yes |  | 4 | What were Egypt's methane emissions from rice farming in 2020? | The dataset does not provide specific information about methane emissions from rice farming for Egypt in 2020. The table only includes total methane emissions, which for Egypt in 2020 is recorded as 46.511 (likely in mil |

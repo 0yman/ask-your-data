@@ -85,6 +85,8 @@ def settings(tiny_db: Path, tmp_path: Path) -> Settings:
         _env_file=None,
         google_api_key=None, openai_api_key=None, groq_api_key=None, mistral_api_key=None,
         llm_backend="scripted",
+        # The single-pass loop; tests/test_planning.py turns planning on.
+        plan_questions=False, verify_answers=False,
         db_path=tiny_db,
         user_db_path=tmp_path / "my_data.duckdb",
         uploads_dir=tmp_path / "uploads",

@@ -31,9 +31,23 @@ from .warehouse import QueryResult, Warehouse
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT_TEMPLATE = """You are a data analyst for a container port \
-authority. You answer questions by querying a DuckDB warehouse, and you \
-answer ONLY from what the queries return.
+# How to work, shared by both prompts: the method of an expert analyst.
+# Written after the agent failed broad questions by trying to answer them in
+# one 30-line query; measured on a harder, multi-part question set
+# (eval/user_data/hard_questions.jsonl) before and after - see the README.
+HOW_TO_WORK = """## How to work
+
+1. **Understand the question.** Work out exactly what is asked and what each part needs. If a term is ambiguous ("sales", "customers", "last year"), pick the most reasonable reading and state it in your answer. If a premise is impossible - a date that does not exist, a column the data does not have - say so instead of computing something else.
+2. **Split big questions.** A question with several parts, or a broad one ("how can the business...", "what patterns..."), becomes a short list of concrete sub-questions. Answer them one at a time, each with its own small query. Never try to answer everything in one giant query.
+3. **Look before you compute.** Before filtering or summing a column, check what it holds: its type, NULLs, negative values (returns, refunds), cancelled or test records, duplicates, units, the date range, and rows that are totals or groups rather than single entities ("World", "Total", "All", regions). Exclude what the question asks you to exclude, and rows that are plainly not what is being counted, such as totals; mention anything else unusual as a caveat instead of silently dropping it.
+4. **Write careful SQL.** One SELECT per call, aggregated in SQL. Build multi-step logic with CTEs (`WITH ...`); use window functions and `QUALIFY` for rankings and top-N per group, `COUNT(*) FILTER (WHERE ...)` for conditional counts, `year()`, `month()` and `date_trunc()` for time, and `TRY_CAST` for numbers stored as text. On timestamp columns, bound dates by the next day: "after 30 June" is `>= DATE '...-07-01'`, and "up to 30 June" is `< DATE '...-07-01'` - a time on 30 June is not after 30 June. Compute percentages in SQL. Keep each query short enough to check - about 25 lines at most.
+5. **Check the numbers.** Before answering, re-read the question against your SQL: every condition it states must be in the query (a "first purchase in 2011" means no earlier purchase, not just a purchase in 2011), and nothing it did not ask for. Then sanity-check the figures: parts should add up to their totals, shares should not exceed 100%, magnitudes and units should be plausible. If a result surprises you, verify it with a second query instead of explaining it away.
+6. **Recover from errors.** Read the error, fix its cause and retry. If a query keeps failing, simplify it or approach that sub-question another way.
+7. **Answer.** Call `final_answer` with every part of the question answered, each with its actual figures - never "as shown above", the user does not see the tables. For a multi-part question, give one short line per part. State the assumptions you made. If the data cannot answer a part, say which part and what is missing. Never invent a number."""
+
+SYSTEM_PROMPT_TEMPLATE = """You are an expert data analyst and SQL engineer \
+for a container port authority. You answer questions by querying a DuckDB \
+warehouse, and you answer ONLY from what the queries return.
 
 ## Schema
 
@@ -52,24 +66,14 @@ well the berth performed.
 free days, so many rows are legitimately 0.
 - Join to `dim_date` on `date_key` for anything involving time periods.
 
-## How to work
-
-1. If you are unsure what a column contains, use `describe_table` or \
-`sample_rows` before writing SQL. Guessing a column name wastes a turn.
-2. Write ONE SELECT at a time with `run_sql`. Aggregate in SQL rather than \
-pulling rows back and counting them yourself.
-3. If a query fails, read the error, fix the query, and try again.
-4. When you have the numbers, call `final_answer` with the actual figures \
-written out. Never say "as shown above" - the user does not see the tables.
-5. If the warehouse genuinely cannot answer the question, say so in \
-`final_answer` and explain what is missing. Do not invent a number."""
+""" + HOW_TO_WORK
 
 FREE_DAYS = 5
 
 # For the user's own tables. Same working rules as the port prompt, minus the
 # business rules - which describe the port warehouse and would only mislead
 # the model about anyone else's data.
-GENERIC_PROMPT_TEMPLATE = """You are a data analyst. You answer questions by querying a DuckDB database of tables the user uploaded from their own spreadsheets, and you answer ONLY from what the queries return.
+GENERIC_PROMPT_TEMPLATE = """You are an expert data analyst and SQL engineer. You answer questions by querying a DuckDB database of tables the user uploaded from their own spreadsheets, and you answer ONLY from what the queries return.
 
 ## Schema
 
@@ -81,13 +85,7 @@ GENERIC_PROMPT_TEMPLATE = """You are a data analyst. You answer questions by que
 - Column names come from the file's header row. Values may be messy: check with `sample_rows` before filtering on a text column, since spelling and capitalisation vary.
 - Nothing is known about how the tables relate. Only join them if the columns clearly match, and say so in your answer when you do.
 
-## How to work
-
-1. If you are unsure what a column contains, use `describe_table` or `sample_rows` before writing SQL. Guessing a column name wastes a turn.
-2. Write ONE SELECT at a time with `run_sql`. Aggregate in SQL rather than pulling rows back and counting them yourself.
-3. If a query fails, read the error, fix the query, and try again.
-4. When you have the numbers, call `final_answer` with the actual figures written out. Never say "as shown above" - the user does not see the tables.
-5. If the data genuinely cannot answer the question, say so in `final_answer` and explain what is missing. Do not invent a number."""
+""" + HOW_TO_WORK
 
 
 # Sent when failures or the step budget stop the loop but some queries did
@@ -136,6 +134,11 @@ class AgentResult:
     #: The rows behind the answer - the last query that ran successfully - so
     #: a person can check the figures rather than take the prose on trust.
     last_result: QueryResult | None = None
+    #: When the question was split (planning.py): each part's question,
+    #: answer, final SQL and rows. Empty for a question answered in one pass.
+    parts: list[dict[str, Any]] = field(default_factory=list)
+    #: The verifier's verdict on the answer, when one ran.
+    review: dict[str, Any] | None = None
 
     @property
     def final_sql(self) -> str | None:
@@ -212,11 +215,17 @@ class PortAnalystAgent:
         llm = self.llm
         llm.on_wait = (lambda seconds: emit({"type": "wait", "seconds": round(seconds)})) if on_event else None
         try:
+            if self.settings.plan_questions or self.settings.verify_answers:
+                from .planning import ask_planned
+
+                return ask_planned(self, question, emit)
             return self._ask(question, emit)
         finally:
             llm.on_wait = None
 
-    def _ask(self, question: str, emit: Callable[[dict[str, Any]], None]) -> AgentResult:
+    def _ask(
+        self, question: str, emit: Callable[[dict[str, Any]], None], max_steps: int | None = None
+    ) -> AgentResult:
         settings = self.settings
         toolbox = ToolBox(
             warehouse=self.warehouse, max_rows_to_model=settings.max_rows_to_model
@@ -229,10 +238,13 @@ class PortAnalystAgent:
         answer: str | None = None
         stop_reason = "max_steps"
         failed_attempts = 0
+        # Failures in a row, not in total: a broad question split into six
+        # sub-queries can fix one in each and still be on track.
+        failed_in_a_row = 0
         nudged = False
         failed_ids: set[str] = set()
 
-        for index in range(1, settings.max_steps + 1):
+        for index in range(1, (max_steps or settings.max_steps) + 1):
             step_started = time.perf_counter()
             emit({"type": "thinking", "step": index})
             response = self._complete(messages, toolbox.specs, failed_ids)
@@ -281,7 +293,10 @@ class PortAnalystAgent:
                 outcome = toolbox.dispatch(call.name, call.arguments)
                 if not outcome.ok:
                     failed_attempts += 1
+                    failed_in_a_row += 1
                     failed_ids.add(call.id)
+                else:
+                    failed_in_a_row = 0
                 emit({
                     "type": "tool", "step": index, "name": call.name,
                     "arguments": call.arguments, "ok": outcome.ok,
@@ -309,7 +324,7 @@ class PortAnalystAgent:
             if finished:
                 break
 
-            if failed_attempts > settings.max_sql_retries:
+            if failed_in_a_row > settings.max_sql_retries:
                 stop_reason = "too_many_failures"
                 break
 
@@ -348,21 +363,22 @@ class PortAnalystAgent:
 
     # --- keeping the context small -------------------------------------------
 
-    def _complete(self, messages: list[Message], specs, failed_ids: set[str]):
+    def _complete(self, messages: list[Message], specs, failed_ids: set[str], system: str | None = None):
         """One model call, sent with failed attempts compacted.
 
         If the host still refuses the request as too large, retry once with
         every tool result cut short - the last chance before the question
         fails for reasons the visitor cannot see.
         """
+        system = system or self._system_prompt
         compact = _compact(messages, failed_ids)
         try:
-            return self.llm.complete(self._system_prompt, compact, specs)
+            return self.llm.complete(system, compact, specs)
         except Exception as exc:
             if not _too_large(exc):
                 raise
             logger.warning("Request too large for the model host; retrying trimmed")
-            return self.llm.complete(self._system_prompt, _compact(messages, failed_ids, max_result_chars=1200), specs)
+            return self.llm.complete(system, _compact(messages, failed_ids, max_result_chars=1200), specs)
 
     def _salvage(self, messages, toolbox: ToolBox, failed_ids, steps, usage) -> str | None:
         """Ask for an answer from the queries that did work, if any did."""

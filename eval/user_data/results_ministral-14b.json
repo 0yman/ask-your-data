@@ -1,11 +1,11 @@
 {
   "summary": {
     "total": 17,
-    "correct": 14,
+    "correct": 15,
     "by_kind": {
       "plain": "8/8",
       "trap": "4/6",
-      "unanswerable": "2/3"
+      "unanswerable": "3/3"
     },
     "fell_for_traps": [
       "r5",
@@ -301,9 +301,9 @@
       "failed_attempts": 0,
       "stop_reason": "final_answer",
       "final_sql": "SELECT country, year, methane FROM owid_co2_data WHERE country = 'Egypt' AND year = 2020 LIMIT 1000",
-      "correct": false,
+      "correct": true,
       "fell_for_trap": false,
-      "declined": false
+      "declined": true
     }
   ]
 }

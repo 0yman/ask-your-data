@@ -222,6 +222,20 @@
   .trail li.wait .i { color: var(--accent); }
   .trail .sub { display: block; font-size: .8rem; color: var(--fg-faint); }
   @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .plan { list-style: none; margin: 0; padding: 10px 12px; border-radius: var(--r); background: var(--muted); display: flex; flex-direction: column; gap: 6px; counter-reset: part; }
+  .plan li { display: grid; grid-template-columns: 24px 1fr; gap: 8px; font-size: .88rem; color: var(--fg-muted); }
+  .plan li::before { counter-increment: part; content: counter(part); width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font: 600 .72rem var(--mono); background: var(--card); color: var(--fg-faint); border: 1px solid var(--border); }
+  .plan li.active { color: var(--fg); font-weight: 600; }
+  .plan li.active::before { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+  .plan li.done::before { content: "✓"; background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .parts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: part; }
+  .parts > li { border: 1px solid var(--border); border-radius: var(--r); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .parts .q { font-weight: 600; font-size: .92rem; display: flex; gap: 8px; }
+  .parts .q::before { counter-increment: part; content: counter(part); flex: none; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font: 600 .72rem var(--mono); background: var(--primary-soft); color: var(--primary-soft-text); }
+  .parts .a { margin: 0; font-size: .95rem; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+  .parts .a mark { background: var(--mark-bg); color: var(--mark-text); border-radius: 5px; padding: 0 .2em; font: 500 .92em var(--mono); }
+  .parts details > summary { font-size: .85rem; color: var(--fg-muted); min-height: 32px; display: flex; align-items: center; gap: 6px; }
 
   /* ---------- answer ---------- */
   .result { display: flex; flex-direction: column; gap: 14px; }
@@ -398,6 +412,7 @@
 
     <div class="progress" id="progress" hidden>
       <div class="progress-head" aria-live="polite"><span class="typing" aria-hidden="true"><i></i><i></i><i></i></span><span id="progress-now">Reading your question</span><span class="elapsed" id="progress-time">0s</span></div>
+      <ol class="plan" id="plan-list" hidden></ol>
       <ol class="trail" id="trail"></ol>
     </div>
 
@@ -565,6 +580,8 @@
       case "sample_rows": return [`Looked at a few rows of ${a.table}`, ""];
       case "run_sql": return ["Ran a query", a.purpose || ""];
       case "final_answer": return ["Wrote the answer", ""];
+      case "submit_plan": return ["Split the question into parts", (a.sub_questions || []).length > 1 ? `${a.sub_questions.length} parts` : "one part: answered as asked"];
+      case "submit_review": return ["Checked the answer against the question", a.ok === false ? "found a problem and sent it back" : "every part answered, every condition in the SQL"];
       default: return [call.name, ""];
     }
   }
@@ -757,7 +774,7 @@
   });
 
   // ---------- live progress ----------
-  const progress = { timer: null, started: 0, waitUntil: 0, now: "" };
+  const progress = { timer: null, started: 0, waitUntil: 0, now: "", parts: 0, current: 0 };
   function setNow(text) { progress.now = text; progress.waitUntil = 0; paintNow(); }
   function paintNow() {
     let text = progress.now;
@@ -771,9 +788,16 @@
   function trail(kind, iconName, text, sub = "") {
     $("trail").insertAdjacentHTML("beforeend", `<li class="${kind}">${icon(iconName)}<span>${escapeHtml(text)}${sub ? `<span class="sub">${escapeHtml(sub)}</span>` : ""}</span></li>`);
   }
+  function paintPlan(active, doneBefore) {
+    [...$("plan-list").children].forEach((li, i) => {
+      li.className = i < doneBefore ? "done" : i === active ? "active" : "";
+    });
+  }
   function startProgress() {
     progress.started = Date.now();
+    progress.parts = 0;
     $("trail").innerHTML = "";
+    $("plan-list").innerHTML = ""; $("plan-list").hidden = true;
     $("progress").hidden = false;
     setNow("Reading your question and the tables");
     progress.timer = setInterval(paintNow, 1000);
@@ -784,7 +808,11 @@
       case "queued": setNow("Waiting for a free turn on this model"); break;
       case "thinking": setNow(ev.step === 1 ? "Reading your question and the tables" : "Deciding the next step"); break;
       case "tool": {
-        if (ev.name === "final_answer") { setNow("Writing the answer"); break; }
+        if (ev.name === "final_answer") {
+          if (progress.parts > 1) trail("ok", "check-circle", `Answered part ${progress.current + 1}`);
+          else setNow("Writing the answer");
+          break;
+        }
         const [what, sub] = describe(ev);
         if (ev.ok) trail("ok", "check-circle", what, ev.rows !== null && ev.rows !== undefined ? `${ev.rows.toLocaleString()} row${ev.rows === 1 ? "" : "s"}${sub ? ` · ${sub}` : ""}` : sub);
         else trail("fail", "alert", `${what}: ${FAIL_REASON[ev.error_kind] || "did not work"}`);
@@ -795,6 +823,24 @@
         trail("wait", "clock", `Paused ${ev.seconds}s for the free model's rate limit`);
         progress.waitUntil = Date.now() + ev.seconds * 1000; paintNow(); break;
       case "salvage": setNow("Out of attempts: answering from the queries that worked"); break;
+      case "plan":
+        progress.parts = ev.parts.length;
+        $("plan-list").innerHTML = ev.parts.map((q) => `<li><span>${escapeHtml(q)}</span></li>`).join("");
+        $("plan-list").hidden = false;
+        setNow(`Split into ${ev.parts.length} parts`);
+        break;
+      case "part":
+        progress.current = ev.index;
+        paintPlan(ev.index, ev.index);
+        setNow(`Part ${ev.index + 1} of ${progress.parts}`);
+        break;
+      case "synthesising": paintPlan(-1, progress.parts); setNow("Putting the answer together"); break;
+      case "reviewing": setNow("Checking the answer against the question"); break;
+      case "review":
+        if (ev.ok) trail("ok", "check-circle", "Checked: every part answered, every condition in the SQL");
+        else trail("fail", "alert", "The check found a problem", (ev.problems || [])[0] || "");
+        break;
+      case "redo": setNow(`Fixing part ${ev.index + 1}`); break;
       default: break;
     }
   }
@@ -861,13 +907,30 @@
       ? `<div class="callout warn">${icon("info")}<span>Part of this could not be worked out, so the answer uses the queries that did. Ask about the rest separately for more.</span></div>`
       : d.succeeded ? "" : `<div class="callout warn">${icon("alert")}<span>It could not finish this one. Try asking more specifically, or one part at a time.</span></div>`;
 
+    const parts = d.parts || [];
+    const checked = d.review
+      ? (d.review.ok ? `<span class="badge ok">${icon("check-circle")}Checked</span>`
+        : d.review.redo && d.review.redo.length ? `<span class="badge ok">${icon("check-circle")}Checked and corrected</span>` : "")
+      : "";
+    const partsHtml = parts.length > 1 ? `
+      <section class="field" aria-label="How it split the question">
+        <h3 class="section-title">${icon("sparkles", "sm")}How it split the question</h3>
+        <ol class="parts">${parts.map((p, i) => `
+          <li><span class="q">${escapeHtml(p.question)}</span>
+            <p class="a">${renderRich(p.answer)}</p>
+            ${p.result ? `<details><summary>${icon("table", "sm")}Rows and SQL for this part<svg class="i sm chev" aria-hidden="true"><use href="#i-chevron"/></svg></summary>
+              <div class="field">${gridHtml(p.result)}${p.sql ? `<pre class="sql">${escapeHtml(p.sql)}</pre>` : ""}</div></details>` : ""}
+          </li>`).join("")}</ol>
+      </section>` : "";
+
     $("result").innerHTML = `
       <article class="answer-card" aria-label="Answer">
-        <div class="byline">${d.model ? `<span class="badge">${icon("sparkles")}${escapeHtml(d.model)}</span>` : ""}<span>${calls.length} steps · ${seconds}s</span>${fixes}</div>
+        <div class="byline">${d.model ? `<span class="badge">${icon("sparkles")}${escapeHtml(d.model)}</span>` : ""}${checked}<span>${calls.length} steps · ${seconds}s</span>${fixes}</div>
         ${notice}
         <p class="answer">${renderRich(d.answer)}</p>
       </article>
-      ${d.result ? `<section class="field" aria-label="The numbers behind it"><h3 class="section-title">${icon("table", "sm")}The numbers behind it<span class="spacer"></span><button class="btn small ghost" type="button" id="copy-csv">${icon("copy", "sm")}Copy as CSV</button></h3>${gridHtml(d.result)}</section>` : ""}
+      ${partsHtml}
+      ${d.result && parts.length < 2 ? `<section class="field" aria-label="The numbers behind it"><h3 class="section-title">${icon("table", "sm")}The numbers behind it<span class="spacer"></span><button class="btn small ghost" type="button" id="copy-csv">${icon("copy", "sm")}Copy as CSV</button></h3>${gridHtml(d.result)}</section>` : ""}
       <details class="block"${d.succeeded && d.stop_reason !== "partial_answer" ? "" : " open"}>
         <summary>${icon("check-circle", "sm")}How it got there<svg class="i sm chev" aria-hidden="true"><use href="#i-chevron"/></svg></summary>
         <div class="body"><ol class="steps">${steps}</ol></div>

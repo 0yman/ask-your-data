@@ -123,10 +123,24 @@ class Settings(BaseSettings):
     include_schema_in_prompt: bool = True
     # Each step is one model call. The cap is what stops a model that keeps
     # calling tools from running until the quota is gone.
-    max_steps: int = 10
-    # How many times a failing query may be handed back for correction before
-    # the agent gives up on that approach.
+    # 16: a broad question split into parts runs a query per part, plus a
+    # look at the data, plus the answer.
+    max_steps: int = 16
+    # How many failures in a row may be handed back for correction before the
+    # agent stops and answers from what worked.
     max_sql_retries: int = 3
+    # Plan, solve, synthesise, verify (planning.py): split a big question into
+    # self-contained parts, solve each in a fresh short conversation, write
+    # the answer from the parts, and have it checked against the question.
+    # Off by default, on the measurements (README, "Harder questions"): with
+    # Ministral 14B the split did not beat a single pass on the hard set
+    # (9.3 vs 9.7 of 12) at 2.6x the time and 3.4x the tokens, and the
+    # verifier alone scored 8.7 - it fixed the hardest logic question but
+    # "corrected" answers that were already right.
+    plan_questions: bool = False
+    verify_answers: bool = False
+    max_parts: int = 5
+    part_max_steps: int = 10
 
     # --- warehouse -------------------------------------------------------
     # The sample dataset, generated from a fixed seed by build_warehouse.py.

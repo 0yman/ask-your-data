@@ -153,7 +153,7 @@ ten minutes so a visitor rarely waits for it to wake.
 
 ```
 question ──▶ ┌──────────────────────────────────────────────┐
-             │ agent loop (max 10 steps)                    │
+             │ agent loop (max 16 steps)                    │
              │                                              │
              │   model ──▶ tool call ──▶ guardrails ──▶ DB   │
              │     ▲                          │             │
@@ -499,6 +499,66 @@ host, and two independent comparisons,
 2026) and [OpenRouter's](https://openrouter.ai/blog/tutorials/free-llm-apis-compared/).
 Full answers: [`eval/user_data/`](eval/user_data/).
 
+## Harder questions: what worked, and what did not
+
+A visitor asked the live demo something no evaluation question looked like -
+*"How can the business identify high-value customers and products that drive
+sustainable revenue, while detecting patterns associated with returns,
+low-value purchases, and potential customer churn?"* - and it failed: three
+good queries, then one 30-line query that came out cut off, four failures, and
+an agent that threw the three good results away.
+
+The mechanical faults were fixed first and are not in doubt: an agent that
+runs out of attempts now answers from the queries that worked and says what it
+could not compute; failed SQL is dropped from the context once retried; a
+failure budget counts failures **in a row**, so a question split into six
+parts can fix one in each; the step budget is 16.
+
+Making it *reason* better was a separate question, so it got a separate test:
+twelve hard questions on the same real data
+([`hard_questions.jsonl`](eval/user_data/hard_questions.jsonl)) - six
+multi-part ("the three countries, and their combined share"), four puzzles
+("stock codes with more than one description"), an impossible date, and an
+unanswerable one. A multi-part answer counts only if **every** part is right.
+Gold answers are computed straight from the data. Every configuration ran
+three times: at twelve questions, one run swings by three.
+
+| Configuration (Ministral 14B) | Hard set (of 12) | Real set (of 17) | Time |
+|---|---|---|---|
+| Original prompt | 7.7 (9, 6, 8) | 14.7 | 11s |
+| **Expert-analyst prompt, single pass - shipped** | **9.7** (9, 10, 10) | **15.0** | **14s** |
+| + a verifier that checks the SQL against the question | 8.7 (9, 7, 10) | 15.0 | 28s |
+| + planner, a sub-agent per part, synthesis, verifier | 9.3 (9, 10, 9) | 15.0 | 37s |
+
+What moved the number was the prompt's method: understand the question and
+name its parts; look at the data before computing (NULLs, negative rows,
+totals rows); build SQL from small CTEs; bound dates on timestamp columns by
+the next day; re-read the question against the SQL before answering. An
+earlier draft of the same method scored 7.7 - no better than the original -
+until two failures were read and fixed: it excluded things nobody asked it to
+exclude, and it computed "customers who bought in 2011" for "customers whose
+first purchase was in 2011".
+
+The two architectures that were supposed to help did not, and are off by
+default (`AGENT_PLAN_QUESTIONS`, `AGENT_VERIFY_ANSWERS`; the code and its tests
+stay, in [`planning.py`](src/agent/planning.py)):
+
+- **The verifier** caught exactly the error it was built for - the "first
+  purchase" question went from 0 of 3 to 2 of 3 - and cost more than it
+  saved: reviewing a 14B model's work with the same 14B model, it "corrected"
+  answers that were already right (one question fell from 3 of 3 to 0).
+- **Plan and solve** split questions sensibly, but each part is a new chance
+  to fail: on "which country's emissions rose most, and which fell most", two
+  parts meant two runs into query errors where one pass usually got through.
+  2.6x the time, 3.4x the tokens (17K a question against 5K), no gain.
+
+The port evaluation re-ran on the new prompt (two runs): correct declines went
+from 1 of 2 to 2 of 2 in every run; answer figure coverage 0.91 (0.87-0.94
+across runs, against 0.92-0.97 before); strict execution accuracy fell from
+0.63 to 0.45 - read per question, the new prompt returns extra context columns
+(a month name beside the month number), so the result set no longer matches
+the gold one exactly while the figures in the answer still do.
+
 ### Reproduce
 
 ```bash
@@ -507,6 +567,7 @@ python eval/run_eval.py --limit 5                     # quick pass, saves quota
 python eval/run_eval.py --no-schema-prompt            # the ablation above
 python eval/run_eval.py --rescore eval/results.json   # re-score, no model calls
 python eval/user_data/run.py                          # real public data (downloads ~40 MB)
+python eval/user_data/run.py --questions eval/user_data/hard_questions.jsonl   # the hard set
 ```
 
 `--rescore` recomputes every metric from a previous run's stored SQL. Scoring
@@ -602,7 +663,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-156 tests, no network, no API key, under 10 seconds. The suite builds a
+196 tests, no network, no API key, under 15 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

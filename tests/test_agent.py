@@ -341,3 +341,28 @@ class TestContextStaysSmall:
         assert "Split the question into smaller queries" in outcome.content
         short = ToolBox(warehouse=warehouse, max_rows_to_model=30).dispatch("run_sql", {"sql": BROKEN})
         assert "Split" not in short.content
+
+
+def test_failures_spread_across_sub_questions_do_not_stop_the_run(settings, warehouse):
+    """A broad question: each sub-query fails once and is fixed. Four
+    failures in total, never more than one in a row - so it carries on."""
+    from agent.agent import PortAnalystAgent
+    from agent.llm import LLMResponse, ToolCall
+
+    good = "SELECT COUNT(*) FROM dim_berth"
+    script = []
+    for _ in range(settings.max_sql_retries + 1):
+        script += [_sql(BROKEN), _sql(good)]
+    script.append(LLMResponse(tool_calls=[ToolCall("final_answer", {"answer": "done"})]))
+    llm = _Recording(script)
+    result = PortAnalystAgent(warehouse, llm, settings.model_copy(update={"max_steps": 20}), ).ask("q")
+    assert result.stop_reason == "final_answer"
+    assert result.failed_attempts == settings.max_sql_retries + 1
+
+
+def test_failures_in_a_row_still_stop_it(settings, warehouse):
+    from agent.agent import PortAnalystAgent
+
+    llm = _Recording([_sql("SELECT 1 AS ok")] + [_sql(BROKEN) for _ in range(settings.max_sql_retries + 1)])
+    result = PortAnalystAgent(warehouse, llm, settings).ask("q")
+    assert result.stop_reason == "partial_answer"   # stopped, then answered from the query that worked

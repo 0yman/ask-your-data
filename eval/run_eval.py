@@ -43,6 +43,11 @@ DECLINE_MARKERS = (
     "no data", "not available", "not recorded", "no column", "not present",
     "no information", "not stored", "isn't recorded", "is not tracked",
     "no crew", "no revenue",
+    # Found reading real answers the list above missed - each a correct
+    # decline scored as a miss (Ministral on methane by source, salesperson).
+    "does not include", "doesn't include", "does not provide", "doesn't provide",
+    "does not have", "doesn't have", "impossible to determine", "not possible to determine",
+    "is not included", "not included in",
 )
 
 
