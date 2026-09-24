@@ -43,9 +43,9 @@ def two_models(monkeypatch, settings, tmp_path):
 class TestPicker:
     def test_both_models_are_offered_and_the_first_is_the_default(self, two_models):
         body = Visitor(two_models).get("/status").json()
-        assert [m["id"] for m in body["models"]] == ["mistral-large", "qwen-groq"]
-        assert body["model"] == "mistral-large"
-        assert body["engine_label"] == "Mistral Large · Mistral"
+        assert [m["id"] for m in body["models"]] == ["ministral-14b", "qwen-groq"]
+        assert body["model"] == "ministral-14b"
+        assert body["engine_label"] == "Ministral 14B · Mistral"
 
     def test_switching_changes_what_answers_for_this_visitor_only(self, two_models):
         a, b = Visitor(two_models), Visitor(two_models, address="198.51.100.9")
@@ -55,7 +55,7 @@ class TestPicker:
         assert a.session.settings.openai_base_url == "https://api.groq.com/openai/v1"
         assert a.session.settings.openai_model == "qwen/qwen3.8-27b"
         assert a.session.settings.openai_api_key == "gsk-test"
-        assert b.get("/status").json()["model"] == "mistral-large"
+        assert b.get("/status").json()["model"] == "ministral-14b"
 
     def test_an_unknown_model_is_refused(self, two_models):
         assert Visitor(two_models).post("/model", json={"model": "gpt-99"}).status_code == 404
@@ -92,7 +92,7 @@ class TestPerModelLimits:
         assert a.post("/ask", json={"question": "q"}).status_code == 200
         response = a.post("/ask", json={"question": "q"})
         assert response.status_code == 429
-        assert "Mistral Large" in response.json()["detail"]
+        assert "Ministral 14B" in response.json()["detail"]
         # Qwen's allowance is untouched.
         a.post("/model", json={"model": "qwen-groq"})
         a.session.agent._llm = answering("q1")
@@ -177,4 +177,4 @@ def test_a_model_out_of_allowance_is_shown_resting(two_models):
     assert "Qwen 3.8 27B has used its free allowance" in response.json()["detail"]
     models = {m["id"]: m for m in a.get("/status").json()["models"]}
     assert models["qwen-groq"]["resting_minutes"] == 5
-    assert models["mistral-large"]["resting_minutes"] is None
+    assert models["ministral-14b"]["resting_minutes"] is None

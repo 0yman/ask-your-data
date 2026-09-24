@@ -42,7 +42,7 @@ Gemini key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 Google and stored in a `.env` file on your computer.
 
 Keys for other free models go in `.env` too, and each one adds a model to the
-page's picker: `MISTRAL_API_KEY` for Mistral Large
+page's picker: `MISTRAL_API_KEY` for Ministral 14B
 ([console.mistral.ai](https://console.mistral.ai), free plan) and
 `GROQ_API_KEY` for Qwen on Groq ([console.groq.com](https://console.groq.com)).
 Why these two is under [Choosing the model](#choosing-the-model).
@@ -120,7 +120,7 @@ server there are strangers, so four things change:
 |---|---|---|
 | Uploaded files | yours, kept | a private workspace per visitor, deleted after an hour idle |
 | The AI key | saved to `.env` from the page | the server's key, held as a secret; visitors may add their own for their visit only, never written |
-| Questions | unlimited | on the server's key: per visitor per hour, and per model per day - each sized to that model's free tier (live: Mistral Large 80 a day, two at a time; Qwen 35, one at a time); own-key visitors are not counted |
+| Questions | unlimited | on the server's key: per visitor per hour, and per model per day - each sized to that model's free tier (live: Ministral 14B 150 a day, two at a time; Qwen 35, one at a time); own-key visitors are not counted |
 | Files | 50 MB | 10 MB, 5 tables per visitor; Excel files that unpack to 100x their size are refused |
 
 A visitor's workspace is found by a random token the page sends in a header,
@@ -135,9 +135,10 @@ counts the forwarded client address, which can be forged; the daily total is
 the limit that cannot be talked around.
 
 The live demo runs on Render's free tier from [`render.yaml`](render.yaml):
-the Dockerfile builds the image, including both real datasets, and every push
-to `main` redeploys it. The key is a Render secret, entered once when the
-service is created, never in the repository. To run your own copy:
+the Dockerfile builds the image, including both real datasets. The model keys
+are Render secrets, entered once when the service is created, never in the
+repository. Linking the repository in Render's dashboard makes every push to
+`main` redeploy it. To run your own copy:
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/0yman/ask-your-data)
 
@@ -400,7 +401,7 @@ method: exactly the kind of thing the "The SQL it wrote" panel is there to show.
 
 Full answers: [`eval/user_data/results.md`](eval/user_data/results.md).
 
-### Why the live demo runs on Qwen, not Gemini
+### Why the live demo does not run on Gemini
 
 Deployed, the free Gemini tier failed visitors: the server logs were a wall of
 `503 This model is currently experiencing high demand` - Google's capacity, not
@@ -429,10 +430,8 @@ Qwen's one miss is the costliest trap: it summed every row of the CO2 table for
 tokens-per-minute limit, which the evaluation hit repeatedly; a single question
 takes 3-5K tokens and usually 2-3 model calls.
 
-That limit shapes the demo: about 35 questions a day in total, one at a time.
-The adapter can fall back to a second model when the first is rate-limited -
-on Groq each model has its own quota - but that is only worth turning on with
-a second model that actually answers.
+That limit is why Qwen is one of two choices on the live demo rather than the
+only one - see [Choosing the model](#choosing-the-model).
 
 Full answers: [`results_qwen3.8-27b.md`](eval/user_data/results_qwen3.8-27b.md),
 [`results_gpt-oss-120b.md`](eval/user_data/results_gpt-oss-120b.md).
@@ -447,9 +446,9 @@ requests a day can still be unusable per minute.
 
 | Free tier (no card) | Rations | For this agent |
 |---|---|---|
-| **Mistral** ([pricing](https://mistral.ai/pricing)) | $10 of API credit a month | Mistral Large at $0.5/M input, $1.5/M output is about a third of a cent a question - thousands a month. Prompts may be used for training on the free plan |
-| **Groq** ([limits](https://console.groq.com/docs/rate-limits)) | 30 requests/min, **8K tokens/min**, 200K tokens/day | Qwen works (16/17 above), but one call can fill the minute: broad questions wait, and the day holds ~40 questions. gpt-oss goes silent after tool results |
-| **Google Gemini** | per project, in AI Studio | The model the evaluation ran on - and the one that failed deployed: `503 high demand` under load |
+| **Mistral** ([pricing](https://mistral.ai/pricing)) | $10 of API credit a month; per-model limits | Measured with a key: Large, Medium, Small, Magistral and Devstral answer *0 requests a minute* on the free plan. Open: the coding and small models - Ministral 14B at 30 requests and 937K tokens a minute. Prompts may be used for training on the free plan |
+| **Groq** ([limits](https://console.groq.com/docs/rate-limits)) | 30 requests/min, **8K tokens/min**, 200K tokens/day | One call can fill the minute: broad questions wait, and the day holds ~40 questions |
+| **Google Gemini** | per project, in AI Studio | Failed deployed: `503 high demand` under load |
 | OpenRouter free models | 20 requests/min, 50/day | ~15 questions a day |
 | Cloudflare Workers AI | 10,000 "neurons"/day | tens of questions a day |
 | Cohere | 1,000 calls/month | trial keys are not for production |
@@ -458,11 +457,34 @@ Gone since the start of this project: Cerebras's free tier
 [went paid](https://klymentiev.com/blog/free-llm-api) on 16 July 2026 (a $5,
 30-day trial behind a card), and GitHub Models was retired on 30 July 2026.
 
+Every model the free tiers left open, on the same seventeen real-data
+questions (`eval/user_data`):
+
+| Model · host | Correct | Plain | Traps | Declined | Mean time |
+|---|---|---|---|---|---|
+| `gemini-3.1-flash-lite` · Google | 17/17 | 8/8 | 6/6 | 3/3 | 14s |
+| **`qwen3.8-27b` · Groq** | **16/17** | 8/8 | 5/6 | 3/3 | 40s |
+| **`ministral-14b-2512` · Mistral** | **15/17** * | 8/8 | 4/6 | 3/3 * | **7s** |
+| `codestral-2508` · Mistral | 9/17 | 7/8 | 2/6 | 0/3 | 2s |
+| `gpt-oss-120b` · Groq | 4/17 | 2/8 | 0/6 | 2/3 | 53s |
+
+\* 14/17 by the automatic grader. Asked for Egypt's methane from rice farming,
+Ministral said the data has no breakdown by source and gave the total as
+context - a correct decline, worded in a way the grader's phrase list did not
+catch. Reported both ways rather than quietly re-graded.
+
+Codestral is the cautionary one: fastest by far, and it invents. Asked the
+average age of customers in a table with no age column, it answered *15.066
+years*. Qwen's and Ministral's misses are both the summing traps - counting
+World and continents into "global emissions", and crowning the product whose
+one huge order was returned.
+
 So the page offers two, and the visitor picks:
 
-- **Mistral Large** - the default. Its free plan rations by monthly credit
-  rather than by a few thousand tokens a minute.
-- **Qwen 3.8 27B on Groq** - fast on focused questions, measured 16/17.
+- **Ministral 14B** - the default: seven seconds a question, and free-tier
+  headroom that a broad, many-query question does not exhaust.
+- **Qwen 3.8 27B on Groq** - the most accurate open model here, when waiting
+  on its per-minute limit is acceptable.
 
 Each has its own daily cap on the server's key, its own concurrency slots, and
 its own entry in the picker. When a host says a model's allowance is used up
@@ -471,9 +493,11 @@ resting in the picker, and offers the other one - instead of two minutes of
 retries ending in "overloaded". Adding another OpenAI-format host is one entry
 in `MODEL_CATALOG` and one key.
 
-Sources for the table: provider pages linked above, and two independent
-comparisons, [klymentiev.com](https://klymentiev.com/blog/free-llm-api)
-(updated 12 Sept 2026) and [OpenRouter's](https://openrouter.ai/blog/tutorials/free-llm-apis-compared/).
+Sources for the table: provider pages linked above, response headers from each
+host, and two independent comparisons,
+[klymentiev.com](https://klymentiev.com/blog/free-llm-api) (updated 12 Sept
+2026) and [OpenRouter's](https://openrouter.ai/blog/tutorials/free-llm-apis-compared/).
+Full answers: [`eval/user_data/`](eval/user_data/).
 
 ### Reproduce
 

@@ -17,7 +17,7 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: AGENT_DEFAULT_MODEL
-        value: mistral-large
+        value: ministral-14b
       # For visitors who add their own Gemini key on the page.
       - key: GOOGLE_API_KEY
         sync: false

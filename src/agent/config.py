@@ -42,22 +42,26 @@ class ModelOption(BaseModel):
 
 
 MODEL_CATALOG = (
-    # Free plan: $10 of API credit a month. At $0.5/M input and $1.5/M output
-    # a question costs about a third of a cent.
+    # Mistral's free plan opens its small and coding models - Large, Medium
+    # and Small answer "0 requests a minute" - with room to spare: 30
+    # requests and 937K tokens a minute. Measured 15/17 on the real-data
+    # evaluation (14 by the automatic grader, which missed one correct
+    # decline). Pinned to the version that was measured.
     ModelOption(
-        id="mistral-large", name="Mistral Large", host="Mistral",
-        base_url="https://api.mistral.ai/v1", model="mistral-large-latest",
+        id="ministral-14b", name="Ministral 14B", host="Mistral",
+        base_url="https://api.mistral.ai/v1", model="ministral-14b-2512",
         key_field="mistral_api_key",
-        note="Mistral's largest model, on Mistral's free plan.",
-        per_day=80, concurrent=2,
+        note="Fast, with room for long questions. 15 of 17 on our real-data test.",
+        per_day=150, concurrent=2,
     ),
     # Free plan: 8K tokens a minute, 200K a day. Each step resends the
     # conversation, so a broad question waits on the per-minute limit.
+    # Measured 16/17.
     ModelOption(
         id="qwen-groq", name="Qwen 3.8 27B", host="Groq",
         base_url="https://api.groq.com/openai/v1", model="qwen/qwen3.8-27b",
         key_field="groq_api_key",
-        note="Fast on focused questions. Broad ones wait on its per-minute limit.",
+        note="Most accurate on our test, 16 of 17. Broad questions wait on its per-minute limit.",
         per_day=35, concurrent=1,
     ),
 )
