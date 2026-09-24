@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -203,7 +204,19 @@ class PortAnalystAgent:
     def system_prompt(self) -> str:
         return self._system_prompt
 
-    def ask(self, question: str) -> AgentResult:
+    def ask(self, question: str, on_event: Callable[[dict[str, Any]], None] | None = None) -> AgentResult:
+        """Answer a question. `on_event`, if given, hears each step as it
+        happens - what a page shows while a slow question is being worked
+        on, instead of a spinner and no explanation."""
+        emit = on_event or (lambda event: None)
+        llm = self.llm
+        llm.on_wait = (lambda seconds: emit({"type": "wait", "seconds": round(seconds)})) if on_event else None
+        try:
+            return self._ask(question, emit)
+        finally:
+            llm.on_wait = None
+
+    def _ask(self, question: str, emit: Callable[[dict[str, Any]], None]) -> AgentResult:
         settings = self.settings
         toolbox = ToolBox(
             warehouse=self.warehouse, max_rows_to_model=settings.max_rows_to_model
@@ -221,6 +234,7 @@ class PortAnalystAgent:
 
         for index in range(1, settings.max_steps + 1):
             step_started = time.perf_counter()
+            emit({"type": "thinking", "step": index})
             response = self._complete(messages, toolbox.specs, failed_ids)
             step = Step(
                 index=index,
@@ -268,6 +282,12 @@ class PortAnalystAgent:
                 if not outcome.ok:
                     failed_attempts += 1
                     failed_ids.add(call.id)
+                emit({
+                    "type": "tool", "step": index, "name": call.name,
+                    "arguments": call.arguments, "ok": outcome.ok,
+                    "error_kind": outcome.error_kind,
+                    "rows": outcome.result.row_count if outcome.result is not None else None,
+                })
                 step.tool_calls.append(
                     {
                         "name": call.name,
@@ -294,6 +314,8 @@ class PortAnalystAgent:
                 break
 
         if answer is None:
+            if toolbox.executed_queries:
+                emit({"type": "salvage"})
             salvaged = self._salvage(messages, toolbox, failed_ids, steps, usage)
             if salvaged is not None:
                 answer, stop_reason = salvaged, "partial_answer"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -19,16 +19,69 @@ LLMBackend = Literal["gemini", "openai", "scripted"]
 EXAMPLE_DATASETS = ("retail", "co2")
 
 
+class ModelOption(BaseModel):
+    """A model the page can offer, on an OpenAI-format host.
+
+    Offered when its key is set. Each free tier rations differently, so each
+    carries its own daily cap and how many questions it can work on at once.
+    """
+
+    id: str
+    name: str
+    host: str
+    base_url: str
+    model: str
+    key_field: str      # the Settings field holding its key
+    note: str           # one line for the picker: what it is good at, what it costs you
+    per_day: int        # questions a day on the server's key
+    concurrent: int = 1
+
+    @property
+    def label(self) -> str:
+        return f"{self.name} · {self.host}"
+
+
+MODEL_CATALOG = (
+    # Free plan: $10 of API credit a month. At $0.5/M input and $1.5/M output
+    # a question costs about a third of a cent.
+    ModelOption(
+        id="mistral-large", name="Mistral Large", host="Mistral",
+        base_url="https://api.mistral.ai/v1", model="mistral-large-latest",
+        key_field="mistral_api_key",
+        note="Mistral's largest model, on Mistral's free plan.",
+        per_day=80, concurrent=2,
+    ),
+    # Free plan: 8K tokens a minute, 200K a day. Each step resends the
+    # conversation, so a broad question waits on the per-minute limit.
+    ModelOption(
+        id="qwen-groq", name="Qwen 3.8 27B", host="Groq",
+        base_url="https://api.groq.com/openai/v1", model="qwen/qwen3.8-27b",
+        key_field="groq_api_key",
+        note="Fast on focused questions. Broad ones wait on its per-minute limit.",
+        per_day=35, concurrent=1,
+    ),
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Absolute, so the app finds its .env whatever folder it is launched
         # from - a relative path silently loads nothing otherwise.
-        env_file=ENV_FILE, env_prefix="AGENT_", extra="ignore", protected_namespaces=()
+        env_file=ENV_FILE, env_prefix="AGENT_", extra="ignore", protected_namespaces=(),
+        populate_by_name=True,  # tests may pass google_api_key=..., not only GOOGLE_API_KEY=...
     )
 
     google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     llm_backend: LLMBackend = "gemini"
+
+    # Keys for the models in MODEL_CATALOG. Each one set adds its models to
+    # the page's model picker; with none set the app uses the single model
+    # configured by llm_backend below, as before.
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    mistral_api_key: str | None = Field(default=None, alias="MISTRAL_API_KEY")
+    # Which catalog model a new visitor starts on ("" = the first available).
+    default_model: str = ""
 
     # Any OpenAI-format endpoint: leave blank for OpenAI itself, or point at
     # Groq, Together, OpenRouter, a local Ollama or vLLM. The wire format is
@@ -137,6 +190,29 @@ class Settings(BaseSettings):
 
     def available_examples(self) -> list[str]:
         return [name for name in EXAMPLE_DATASETS if self.dataset_path(name).exists()]
+
+    def available_models(self) -> list[ModelOption]:
+        return [option for option in MODEL_CATALOG if getattr(self, option.key_field)]
+
+    def model_option(self, model_id: str | None) -> ModelOption | None:
+        return next((o for o in self.available_models() if o.id == model_id), None)
+
+    def default_model_option(self) -> ModelOption | None:
+        available = self.available_models()
+        return self.model_option(self.default_model) or (available[0] if available else None)
+
+    def with_model(self, option: ModelOption) -> Settings:
+        """These settings, answering with `option`. Everything else - files,
+        limits, the visitor's workspace - stays as it is."""
+        return self.model_copy(update={
+            "llm_backend": "openai",
+            "openai_base_url": option.base_url,
+            "openai_model": option.model,
+            "openai_api_key": getattr(self, option.key_field),
+            "openai_fallback_models": [],
+            "openai_backup_api_key": None,
+            "openai_backup_model": "",
+        })
 
     def upload_limit_mb(self) -> int:
         return self.public_max_upload_mb if self.public_mode else self.max_upload_mb

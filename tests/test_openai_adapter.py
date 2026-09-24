@@ -266,3 +266,24 @@ def test_without_a_backup_key_there_is_no_backup_route(settings, monkeypatch):
         "openai_backup_model": "other",  # a model but no key: not a route
     }))
     assert [model for _, model in llm._routes] == ["m"]
+
+
+def test_a_model_out_for_the_day_fails_at_once_instead_of_retrying(settings):
+    from agent.llm import ModelLimitReached
+
+    helper = TestModelFallback()
+    daily = "Error code: 429 - Rate limit reached on tokens per day (TPD): Limit 200000, Used 198585"
+    llm, tried = helper.make(settings, lambda model, n: RuntimeError(daily), fallbacks=())
+    with pytest.raises(ModelLimitReached):
+        llm.complete("sys", [Message(role="user", content="q")], [])
+    assert tried == ["main"]  # one call, no waiting
+
+
+def test_a_route_out_for_the_day_is_skipped_for_the_next(settings):
+    daily = "429 rate limit: tokens per day (TPD) reached"
+
+    def behaviour(model, n):
+        return RuntimeError(daily) if model == "main" else fake_response(content="backup answers")
+
+    llm, tried = TestModelFallback().make(settings, behaviour)
+    assert llm.complete("sys", [Message(role="user", content="q")], []).text == "backup answers"

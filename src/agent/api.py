@@ -18,19 +18,22 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import json
 import logging
+import queue
 import re
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .agent import PortAnalystAgent
-from .config import ENV_FILE, Settings, get_settings
+from .config import ENV_FILE, ModelOption, Settings, get_settings
 from .datasets import (
     SUPPORTED_SUFFIXES,
     DatasetError,
@@ -41,7 +44,8 @@ from .datasets import (
 )
 from .envfile import set_env_value
 from .guardrails import UnsafeSQLError
-from .sessions import Quota, QuotaExceeded, Session, SessionStore
+from .llm import ModelLimitReached
+from .sessions import GEMINI, Quota, QuotaExceeded, Session, SessionStore
 from .warehouse import QueryResult, QueryTimeout, set_memory_limit
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -58,6 +62,25 @@ Dataset = Literal["sample", "retail", "co2", "mine"]
 _store: SessionStore | None = None
 _quota: Quota | None = None
 _slots: threading.BoundedSemaphore | None = None
+# Per catalog model: how many questions each host's free tier can work on at
+# once. Anything else shares `_slots`.
+_model_slots: dict[str, threading.BoundedSemaphore] = {}
+# Catalog models whose host said their allowance is used up, and until when
+# (time.monotonic). The picker says so instead of showing a quota that is
+# only this app's count.
+_resting: dict[str, float] = {}
+# When the host does not say how long, assume this.
+DEFAULT_REST_SECONDS = 15 * 60
+
+
+def _rest_left(model_id: str) -> int:
+    """Seconds until a resting model is worth trying again (0 = not resting)."""
+    until = _resting.get(model_id, 0.0)
+    left = until - time.monotonic()
+    if left <= 0:
+        _resting.pop(model_id, None)
+        return 0
+    return int(left)
 
 
 # --- state ------------------------------------------------------------------
@@ -111,6 +134,12 @@ async def lifespan(app: FastAPI):
     _store = SessionStore(settings)
     _quota = Quota(settings.public_questions_per_hour, settings.public_questions_per_day)
     _slots = threading.BoundedSemaphore(max(1, settings.public_concurrent_questions))
+    _model_slots.clear()
+    _resting.clear()
+    _model_slots.update({
+        option.id: threading.BoundedSemaphore(max(1, option.concurrent))
+        for option in settings.available_models()
+    })
     if settings.public_mode:
         logger.info("Public mode: one private workspace per visitor.")
     yield
@@ -241,6 +270,7 @@ class AskResponse(BaseModel):
     total_latency_ms: float
     usage: dict[str, int]
     result: dict[str, Any] | None = None
+    model: str | None = None     # which model answered, as the picker names it
 
 
 class SQLRequest(BaseModel):
@@ -249,6 +279,10 @@ class SQLRequest(BaseModel):
 
 class DatasetRequest(BaseModel):
     dataset: Dataset
+
+
+class ModelRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=40)
 
 
 class KeyRequest(BaseModel):
@@ -295,13 +329,55 @@ def health() -> dict[str, Any]:
     }
 
 
+def _option(session: Session) -> ModelOption | None:
+    return _settings().model_option(session.model_id)
+
+
+def _metered(session: Session) -> bool:
+    return _store.public and not session.own_key
+
+
+def _models(session: Session, request: Request) -> list[dict[str, Any]]:
+    """What the model picker offers this visitor."""
+    address = _client_address(request)
+    out = [
+        {
+            "id": option.id, "name": option.name, "host": option.host, "note": option.note,
+            "questions_left": _quota.left(address, option.id, option.per_day) if _store.public else None,
+            "resting_minutes": -(-_rest_left(option.id) // 60) or None,
+        }
+        for option in _settings().available_models()
+    ]
+    if _store.gemini_offered(session):
+        own = _store.public
+        out.append({
+            "id": GEMINI, "name": "Gemini", "host": "your key" if own else "Google",
+            "note": "Your own Google key, for this visit only." if own else "Your Gemini key from .env.",
+            "questions_left": None,
+            "resting_minutes": None,
+        })
+    return out
+
+
+def _engine(session: Session) -> str:
+    option = _option(session)
+    if option is not None:
+        return option.label
+    if session.model_id == GEMINI:
+        return "Gemini · your key" if session.own_key else "Gemini · Google"
+    return _engine_label(session.settings)
+
+
 @app.get("/status")
 def status(request: Request, session: Session = Depends(current_session)) -> dict[str, Any]:
     settings = session.settings
     public = _store.public
+    option = _option(session)
     return {
         "has_key": settings.has_model_key(),
-        "engine_label": _engine_label(settings),
+        "engine_label": _engine(session),
+        "models": _models(session, request),
+        "model": session.model_id,
         "dataset": session.dataset,
         "sample_available": settings.db_path.exists(),
         "examples": settings.available_examples(),
@@ -311,7 +387,11 @@ def status(request: Request, session: Session = Depends(current_session)) -> dic
         "public": public,
         "own_key": session.own_key,
         "max_tables": settings.public_max_tables if public else None,
-        "questions_left": _quota.left(_client_address(request)) if public and not session.own_key else None,
+        "questions_left": (
+            _quota.left(_client_address(request), option.id if option else "default",
+                        option.per_day if option else None)
+            if _metered(session) else None
+        ),
         "session_idle_minutes": settings.session_idle_minutes if public else None,
     }
 
@@ -352,6 +432,22 @@ def choose_dataset(body: DatasetRequest, session: Session = Depends(current_sess
         session.open(body.dataset)
         _store.save_choice(session)
     return {"dataset": body.dataset}
+
+
+@app.post("/model")
+def choose_model(body: ModelRequest, session: Session = Depends(current_session)) -> dict[str, Any]:
+    if body.model == GEMINI:
+        if not _store.gemini_offered(session):
+            raise HTTPException(status_code=404, detail="Add your own Gemini key first.")
+        key = session.visitor_key if _store.public else _settings().google_api_key
+        session.use_gemini(key, visitors_own=_store.public)
+    else:
+        option = _settings().model_option(body.model)
+        if option is None:
+            raise HTTPException(status_code=404, detail="That model is not available here.")
+        session.use_model(option)
+    _store.save_choice(session)
+    return {"model": session.model_id, "engine_label": _engine(session)}
 
 
 @app.post("/data", response_model=list[UploadResult])
@@ -464,11 +560,12 @@ def save_key(body: KeyRequest, request: Request, session: Session = Depends(curr
         )
 
     if _store.public:
-        session.use_settings(candidate, own_key=True)
+        session.use_gemini(key, visitors_own=True)
     else:
         set_env_value(ENV_FILE, "GOOGLE_API_KEY", key)
-        _store.settings = candidate
-        session.use_settings(candidate, own_key=False)
+        _store.settings = _store.settings.model_copy(update={"google_api_key": key})
+        session.use_gemini(key, visitors_own=False)
+        _store.save_choice(session)
     return {
         "saved": True,
         "note": None if verdict == "ok"
@@ -494,47 +591,72 @@ def _check_key(settings: Settings) -> str:
 # --- questions ---------------------------------------------------------------
 
 
-@app.post("/ask", response_model=AskResponse)
-def ask(body: AskRequest, request: Request, session: Session = Depends(current_session)) -> AskResponse:
+class AskFailed(Exception):
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
+def _run_question(session: Session, question: str, address: str, on_event=None) -> AskResponse:
+    """Everything /ask does, minus HTTP: the stream runs it on a thread."""
     if not session.settings.has_model_key():
-        raise HTTPException(
-            status_code=428,
-            detail="Add a free Google Gemini key first - it is what writes the SQL.",
-        )
-    _refuse_if_replaced(session)
+        raise AskFailed(428, "Add a free Google Gemini key first - it is what writes the SQL.")
+    if session.replaced_stale:
+        session.replaced_stale = False
+        raise AskFailed(409, "This page sat idle for over an hour, so its workspace was cleared. "
+                             "The page has been reset - pick your data and ask again.")
     public = _store.public
+    option = _option(session)
     with session.lock:
-        agent = get_agent(session)
-        if public and not session.own_key:
+        if session.agent is None:
+            if session.dataset == "mine":
+                raise AskFailed(409, "You have not added any files yet. Upload a CSV or Excel file first.")
+            raise AskFailed(503, f"The {session.dataset} data could not be opened: {session.error or 'unknown error'}")
+        agent = session.agent
+        if _metered(session):
             try:
-                _quota.take(_client_address(request))
+                _quota.take(address, option.id if option else "default",
+                            option.per_day if option else None, option.label if option else "")
             except QuotaExceeded as exc:
-                raise HTTPException(status_code=429, detail=str(exc)) from exc
-        # On a shared server, questions queue for a model slot rather than
-        # all hitting the free tier's per-minute limit at once.
-        if public and not _slots.acquire(timeout=SLOT_WAIT_SECONDS):
-            raise HTTPException(
-                status_code=503,
-                detail="The demo is busy answering other people. Try again in a minute.",
-            )
+                raise AskFailed(429, str(exc)) from exc
+        # On a shared server, questions queue for their model's slots rather
+        # than all hitting a free tier's per-minute limit at once.
+        slots = _model_slots.get(option.id) if option else None
+        slots = slots or _slots
+        if public:
+            if on_event is not None:
+                on_event({"type": "queued"})
+            if not slots.acquire(timeout=SLOT_WAIT_SECONDS):
+                raise AskFailed(503, "The demo is busy answering other people. Try again in a minute, "
+                                     "or pick another model.")
         try:
-            result = agent.ask(body.question)
+            result = agent.ask(question, on_event=on_event)
+        except ModelLimitReached as exc:
+            logger.warning("Model allowance used up: %s", exc)
+            if option is not None:
+                _resting[option.id] = time.monotonic() + (exc.retry_after or DEFAULT_REST_SECONDS)
+            name = option.name if option else "This model"
+            raise AskFailed(429, f"{name} has used its free allowance for now. Pick another model"
+                                 + (", or add your own free Gemini key." if public else ".")) from exc
         except Exception as exc:
             logger.warning("Ask failed: %s", exc)
             message = str(exc).lower()
             if "413" in message or "request too large" in message:
                 detail = ("This question needed more working space than the free model allows. "
-                          "Try asking about one part of it at a time.")
+                          "Try asking about one part of it at a time, or pick another model.")
             elif "503" in message or "unavailable" in message or "429" in message or "exhausted" in message:
-                detail = "Google's free AI model is overloaded right now. Wait a minute and ask again."
+                detail = ("The free AI model is overloaded right now. Wait a minute and ask again, "
+                          "or pick another model.")
             elif "api key" in message or "403" in message or "401" in message:
                 detail = "The API key was rejected. Add it again using the key button at the top."
+            elif "402" in message or "payment" in message or "credit" in message:
+                detail = "This model's free credit has run out for now. Pick another model."
             else:
                 detail = "The AI model returned an error. Try again, or rephrase the question."
-            raise HTTPException(status_code=503, detail=detail) from exc
+            raise AskFailed(503, detail) from exc
         finally:
             if public:
-                _slots.release()
+                slots.release()
 
     return AskResponse(
         question=result.question,
@@ -555,6 +677,64 @@ def ask(body: AskRequest, request: Request, session: Session = Depends(current_s
         total_latency_ms=round(result.total_latency_ms, 2),
         usage=result.usage,
         result=_table_json(result.last_result),
+        model=_engine(session),
+    )
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask(body: AskRequest, request: Request, session: Session = Depends(current_session)) -> AskResponse:
+    try:
+        return _run_question(session, body.question, _client_address(request))
+    except AskFailed as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+# Seconds between keep-alive lines while the model is thinking or waiting out
+# a rate limit, so no proxy on the way decides the connection is dead.
+HEARTBEAT_SECONDS = 10
+
+
+@app.post("/ask/stream")
+def ask_stream(body: AskRequest, request: Request, session: Session = Depends(current_session)):
+    """/ask, reported step by step as newline-delimited JSON.
+
+    A question can take a minute on a free tier: each step is a model call,
+    and a rate limit can add a wait. Streaming the steps as they happen turns
+    a spinner with no explanation into "ran a query - 12 rows - waiting 15s
+    for the free tier's limit". The last line is the full /ask response, or
+    an error.
+    """
+    events: queue.Queue = queue.Queue()
+    address = _client_address(request)
+
+    def work() -> None:
+        try:
+            response = _run_question(session, body.question, address, on_event=events.put)
+            events.put({"type": "result", "data": response.model_dump()})
+        except AskFailed as exc:
+            events.put({"type": "error", "status": exc.status, "detail": exc.detail})
+        except Exception as exc:  # pragma: no cover - a bug, not a model error
+            logger.exception("Streaming ask crashed")
+            events.put({"type": "error", "status": 500, "detail": f"Something went wrong: {exc}"})
+        finally:
+            events.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def lines():
+        while True:
+            try:
+                event = events.get(timeout=HEARTBEAT_SECONDS)
+            except queue.Empty:
+                yield json.dumps({"type": "ping"}) + "\n"
+                continue
+            if event is None:
+                return
+            yield json.dumps(event, default=str) + "\n"
+
+    return StreamingResponse(
+        lines(), media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

@@ -23,12 +23,14 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from .agent import PortAnalystAgent, build_agent
-from .config import Settings
+from .config import ModelOption, Settings
 from .datasets import table_count
 
 logger = logging.getLogger(__name__)
 
 DATASETS = ("sample", "retail", "co2", "mine")
+# The picker's id for Gemini, which is configured outside MODEL_CATALOG.
+GEMINI = "gemini"
 _TOKEN_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
@@ -40,6 +42,12 @@ class Session:
     agent: PortAnalystAgent | None = None
     error: str | None = None
     own_key: bool = False
+    # Which model answers: a MODEL_CATALOG id, GEMINI, or None for the single
+    # model configured the old way (no catalog keys set).
+    model_id: str | None = None
+    # A visitor's own Gemini key, kept for this visit only so they can switch
+    # away from it and back.
+    visitor_key: str | None = None
     # Set when a visitor's token had expired and this workspace replaced it.
     # The page still shows the old one, so the first question is refused
     # rather than answered against data the visitor is not looking at.
@@ -73,6 +81,24 @@ class Session:
             self.own_key = own_key
             self.open(self.dataset)
 
+    def use_model(self, option: ModelOption) -> None:
+        """Answer with a model from the catalog, on the server's key."""
+        with self.lock:
+            self.model_id = option.id
+            self.use_settings(self.settings.with_model(option), own_key=False)
+
+    def use_gemini(self, key: str, visitors_own: bool) -> None:
+        """Answer with Gemini: the visitor's own key, or the server's on a
+        computer where the key is the user's anyway."""
+        with self.lock:
+            if visitors_own:
+                self.visitor_key = key
+            self.model_id = GEMINI
+            self.use_settings(
+                self.settings.model_copy(update={"llm_backend": "gemini", "google_api_key": key}),
+                own_key=visitors_own,
+            )
+
 
 class SessionStore:
     def __init__(self, settings: Settings) -> None:
@@ -88,24 +114,27 @@ class SessionStore:
             settings.sessions_dir.mkdir(parents=True, exist_ok=True)
         else:
             self.local = Session(id="local", settings=settings)
+            dataset, model = self._load_choice()
+            self._start_model(self.local, model)
             with self.local.lock:
-                self.local.open(self._load_choice())
+                self.local.open(dataset)
 
     # --- local mode: the choice of dataset survives a restart -------------
 
-    def _load_choice(self) -> str:
+    def _load_choice(self) -> tuple[str, str | None]:
         try:
-            choice = json.loads(self.settings.state_path.read_text(encoding="utf-8")).get("dataset")
+            state = json.loads(self.settings.state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return "sample"
-        return choice if choice in DATASETS else "sample"
+            return "sample", None
+        dataset = state.get("dataset")
+        return (dataset if dataset in DATASETS else "sample"), state.get("model")
 
     def save_choice(self, session: Session) -> None:
         if self.public:
             return
         path = self.settings.state_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"dataset": session.dataset}), encoding="utf-8")
+        path.write_text(json.dumps({"dataset": session.dataset, "model": session.model_id}), encoding="utf-8")
 
     # --- which workspace a request belongs to -----------------------------
 
@@ -141,10 +170,33 @@ class SessionStore:
             }),
             replaced_stale=stale,
         )
+        self._start_model(session, None)
         with session.lock:
             session.open("sample")
         self._sessions[sid] = session
         return session
+
+    def _start_model(self, session: Session, wanted: str | None) -> None:
+        """A new workspace's model: the one asked for if it is still offered,
+        else the default. Settings only - the caller opens the dataset."""
+        settings = self.settings
+        if wanted == GEMINI and self.gemini_offered(session):
+            session.model_id = GEMINI
+            session.settings = session.settings.model_copy(update={"llm_backend": "gemini"})
+            return
+        option = settings.model_option(wanted) or settings.default_model_option()
+        if option is not None:
+            session.model_id = option.id
+            session.settings = session.settings.with_model(option)
+        elif settings.llm_backend == "gemini" and self.gemini_offered(session):
+            session.model_id = GEMINI
+
+    def gemini_offered(self, session: Session) -> bool:
+        """On a public server only with the visitor's own key: the server's
+        Gemini key is not shared. On your own computer, whenever there is one."""
+        if self.public:
+            return bool(session.visitor_key)
+        return bool(self.settings.google_api_key)
 
     def _take_idle(self, now: float) -> list[Session]:
         idle = self.settings.session_idle_minutes * 60
@@ -191,17 +243,18 @@ class Quota:
 
     def __init__(self, per_hour: int, per_day: int, clock=time.time) -> None:
         self.per_hour = per_hour
-        self.per_day = per_day
+        self.per_day = per_day  # for a model without a cap of its own
         self._clock = clock
         self._recent: dict[str, deque[float]] = defaultdict(deque)
         self._day = ""
-        self._today = 0
+        # Per model: each host's free tier has its own daily allowance.
+        self._today: dict[str, int] = defaultdict(int)
         self._lock = threading.Lock()
 
     def _roll(self, now: float) -> None:
         day = time.strftime("%Y-%m-%d", time.gmtime(now))
         if day != self._day:
-            self._day, self._today = day, 0
+            self._day, self._today = day, defaultdict(int)
             self._recent = defaultdict(deque, {k: v for k, v in self._recent.items() if v})
 
     def _prune(self, address: str, now: float) -> deque[float]:
@@ -210,14 +263,16 @@ class Quota:
             recent.popleft()
         return recent
 
-    def take(self, address: str) -> None:
+    def take(self, address: str, model: str = "default", per_day: int | None = None, label: str = "") -> None:
+        cap = per_day or self.per_day
         with self._lock:
             now = self._clock()
             self._roll(now)
-            if self._today >= self.per_day:
+            if self._today[model] >= cap:
+                which = f" for {label}" if label else ""
                 raise QuotaExceeded(
-                    "Today's free demo questions have all been used. Add your own free "
-                    "Gemini key with the key button at the top to keep going, or come back tomorrow."
+                    f"Today's free demo questions{which} have all been used. Pick another model, "
+                    "add your own free Gemini key with the key button at the top, or come back tomorrow."
                 )
             recent = self._prune(address, now)
             if len(recent) >= self.per_hour:
@@ -228,11 +283,12 @@ class Quota:
                     "with the key button at the top."
                 )
             recent.append(now)
-            self._today += 1
+            self._today[model] += 1
 
-    def left(self, address: str) -> int:
+    def left(self, address: str, model: str = "default", per_day: int | None = None) -> int:
+        cap = per_day or self.per_day
         with self._lock:
             now = self._clock()
             self._roll(now)
             used = len(self._prune(address, now))
-            return max(0, min(self.per_hour - used, self.per_day - self._today))
+            return max(0, min(self.per_hour - used, cap - self._today[model]))

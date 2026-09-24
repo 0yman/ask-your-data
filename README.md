@@ -41,8 +41,17 @@ Gemini key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 (no credit card), paste it in, and click **Save key**. It is checked with
 Google and stored in a `.env` file on your computer.
 
-**4. Ask.** Pick a dataset or **My files**, then ask a question or click
-one of the suggestions.
+Keys for other free models go in `.env` too, and each one adds a model to the
+page's picker: `MISTRAL_API_KEY` for Mistral Large
+([console.mistral.ai](https://console.mistral.ai), free plan) and
+`GROQ_API_KEY` for Qwen on Groq ([console.groq.com](https://console.groq.com)).
+Why these two is under [Choosing the model](#choosing-the-model).
+
+**4. Ask.** Pick a dataset or **My files**, pick a model if there is more
+than one, then ask a question or click one of the suggestions. The page shows
+each step as it happens - every query and how many rows it returned, and any
+pause for a free tier's rate limit - then the answer, the rows behind it, and
+the SQL.
 
 The two real datasets are optional: `python scripts/build_examples.py`
 downloads and imports them (about 40 MB, under a minute), and the page offers
@@ -111,7 +120,7 @@ server there are strangers, so four things change:
 |---|---|---|
 | Uploaded files | yours, kept | a private workspace per visitor, deleted after an hour idle |
 | The AI key | saved to `.env` from the page | the server's key, held as a secret; visitors may add their own for their visit only, never written |
-| Questions | unlimited | on the server's key, per visitor per hour and per day in total, a few at a time - sized to the model's free tier (live: 10, 35, one at a time); own-key visitors are not counted |
+| Questions | unlimited | on the server's key: per visitor per hour, and per model per day - each sized to that model's free tier (live: Mistral Large 80 a day, two at a time; Qwen 35, one at a time); own-key visitors are not counted |
 | Files | 50 MB | 10 MB, 5 tables per visitor; Excel files that unpack to 100x their size are refused |
 
 A visitor's workspace is found by a random token the page sends in a header,
@@ -428,6 +437,44 @@ a second model that actually answers.
 Full answers: [`results_qwen3.8-27b.md`](eval/user_data/results_qwen3.8-27b.md),
 [`results_gpt-oss-120b.md`](eval/user_data/results_gpt-oss-120b.md).
 
+## Choosing the model
+
+Researched in September 2026 for this app's specific load, then measured. The
+load is what rules most options out: every question is 2-7 model calls, each
+resending the conversation - 5-7K tokens a call, 3-40K a question - and the
+calls must be OpenAI-format tool calls. A free tier that looks generous in
+requests a day can still be unusable per minute.
+
+| Free tier (no card) | Rations | For this agent |
+|---|---|---|
+| **Mistral** ([pricing](https://mistral.ai/pricing)) | $10 of API credit a month | Mistral Large at $0.5/M input, $1.5/M output is about a third of a cent a question - thousands a month. Prompts may be used for training on the free plan |
+| **Groq** ([limits](https://console.groq.com/docs/rate-limits)) | 30 requests/min, **8K tokens/min**, 200K tokens/day | Qwen works (16/17 above), but one call can fill the minute: broad questions wait, and the day holds ~40 questions. gpt-oss goes silent after tool results |
+| **Google Gemini** | per project, in AI Studio | The model the evaluation ran on - and the one that failed deployed: `503 high demand` under load |
+| OpenRouter free models | 20 requests/min, 50/day | ~15 questions a day |
+| Cloudflare Workers AI | 10,000 "neurons"/day | tens of questions a day |
+| Cohere | 1,000 calls/month | trial keys are not for production |
+
+Gone since the start of this project: Cerebras's free tier
+[went paid](https://klymentiev.com/blog/free-llm-api) on 16 July 2026 (a $5,
+30-day trial behind a card), and GitHub Models was retired on 30 July 2026.
+
+So the page offers two, and the visitor picks:
+
+- **Mistral Large** - the default. Its free plan rations by monthly credit
+  rather than by a few thousand tokens a minute.
+- **Qwen 3.8 27B on Groq** - fast on focused questions, measured 16/17.
+
+Each has its own daily cap on the server's key, its own concurrency slots, and
+its own entry in the picker. When a host says a model's allowance is used up
+for the day, the app stops retrying at once, says so, marks the model as
+resting in the picker, and offers the other one - instead of two minutes of
+retries ending in "overloaded". Adding another OpenAI-format host is one entry
+in `MODEL_CATALOG` and one key.
+
+Sources for the table: provider pages linked above, and two independent
+comparisons, [klymentiev.com](https://klymentiev.com/blog/free-llm-api)
+(updated 12 Sept 2026) and [OpenRouter's](https://openrouter.ai/blog/tutorials/free-llm-apis-compared/).
+
 ### Reproduce
 
 ```bash
@@ -510,7 +557,9 @@ eval/
 
 | Endpoint | Needs a key | Purpose |
 |---|---|---|
-| `POST /ask` | yes | Question in; answer, result rows, SQL, and the full step trace out |
+| `POST /ask` | yes | Question in; answer, result rows, SQL, the model that answered, and the full step trace out |
+| `POST /ask/stream` | yes | The same, as newline-delimited JSON: each step as it happens (query run, rows returned, rate-limit pause), then the answer |
+| `POST /model` | no | Pick which model answers, from those whose keys are set |
 | `POST /sql` | no | Run a SELECT through the same guardrails the agent uses |
 | `GET /tables` · `GET /status` | no | The active dataset's tables and columns; what the page needs to draw itself |
 | `POST /dataset` | no | Switch between the sample, the two real datasets, and your files |

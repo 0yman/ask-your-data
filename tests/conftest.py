@@ -80,6 +80,10 @@ def tiny_db(tmp_path_factory) -> Path:
 @pytest.fixture
 def settings(tiny_db: Path, tmp_path: Path) -> Settings:
     return get_settings(
+        # Never the developer's .env: its keys would switch the suite onto
+        # real models and put secrets in test output.
+        _env_file=None,
+        google_api_key=None, openai_api_key=None, groq_api_key=None, mistral_api_key=None,
         llm_backend="scripted",
         db_path=tiny_db,
         user_db_path=tmp_path / "my_data.duckdb",

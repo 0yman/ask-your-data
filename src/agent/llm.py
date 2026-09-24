@@ -14,7 +14,7 @@ import random
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -68,6 +68,13 @@ class LLMResponse:
 
 class LLMClient(ABC):
     name: str
+    #: Called with the seconds about to be spent waiting out a rate limit,
+    #: so a page streaming the agent's progress can say why it paused.
+    on_wait: Callable[[float], None] | None = None
+
+    def _waiting(self, seconds: float) -> None:
+        if self.on_wait is not None:
+            self.on_wait(seconds)
 
     @abstractmethod
     def complete(
@@ -172,6 +179,7 @@ class GeminiLLM(LLMClient):
                     raise
                 delay = backoff_delay(settings.retry_base_delay, attempt)
                 logger.warning("Gemini call failed (%s); retrying in %.1fs", exc, delay)
+                self._waiting(delay)
                 time.sleep(delay)
         raise RuntimeError("Unreachable retry state")
 
@@ -263,8 +271,11 @@ class OpenAICompatibleLLM(LLMClient):
         """
         settings = self._settings
         last: Exception | None = None
+        spent: set[int] = set()  # routes out of allowance for the day
         for attempt in range(settings.max_retries):
-            for client, model in self._routes:
+            for n, (client, model) in enumerate(self._routes):
+                if n in spent:
+                    continue
                 try:
                     response = client.chat.completions.create(**{**kwargs, "model": model})
                     self.last_model = model
@@ -274,6 +285,11 @@ class OpenAICompatibleLLM(LLMClient):
                         raise
                     last = exc
                     logger.warning("%s unavailable (%s)", model, str(exc)[:160])
+                    if _out_for_the_day(exc):
+                        spent.add(n)
+            if len(spent) == len(self._routes):
+                # Waiting cannot help: say so now, not after minutes of retries.
+                raise ModelLimitReached(str(last), _retry_after(last)) from last
             if attempt == settings.max_retries - 1:
                 break
             # A per-minute token limit says exactly how long to wait: waiting
@@ -284,6 +300,7 @@ class OpenAICompatibleLLM(LLMClient):
             else:
                 delay = backoff_delay(settings.retry_base_delay, attempt)
             logger.warning("All routes busy; retrying in %.1fs", delay)
+            self._waiting(delay)
             time.sleep(delay)
         assert last is not None
         raise last
@@ -293,6 +310,26 @@ class OpenAICompatibleLLM(LLMClient):
 # sixth retry; beyond that a visitor has given up and the quota window has
 # long since moved.
 MAX_BACKOFF_SECONDS = 30.0
+# A host asking for a longer wait than this is not throttling a burst - the
+# allowance itself is gone (Groq: "tokens per day ... try again in 3m37s").
+GIVE_UP_AFTER_SECONDS = 120.0
+
+
+class ModelLimitReached(RuntimeError):
+    """The model's free allowance is used up for now; retrying cannot help."""
+
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after  # seconds, when the host said
+
+
+def _out_for_the_day(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "per day" in text or "tokens per day" in text or "requests per day" in text
+        or "(tpd)" in text or "(rpd)" in text
+        or _retry_after(exc) > GIVE_UP_AFTER_SECONDS
+    )
 
 
 def backoff_delay(base: float, attempt: int) -> float:
