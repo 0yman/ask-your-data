@@ -230,6 +230,8 @@
   .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--primary-soft); color: var(--primary-soft-text); font-weight: 600; }
   .badge .i { width: 14px; height: 14px; }
   .answer { margin: 0; font-size: 1.08rem; line-height: 1.7; max-width: 72ch; overflow-wrap: anywhere; white-space: pre-line; }
+  .answer strong { font-weight: 600; }
+  .answer strong.h { display: inline-block; margin-top: .4em; font-size: 1.02em; }
   .answer mark { background: var(--mark-bg); color: var(--mark-text); border-radius: 5px; padding: 0 .25em; font: 500 .92em var(--mono); }
   .callout { display: flex; gap: 10px; align-items: flex-start; border-radius: var(--r); padding: 12px 14px; font-size: .92rem; }
   .callout .i { margin-top: 1px; }
@@ -542,6 +544,18 @@
     return String(text ?? "").split(/(\b\d(?:[\d,]*\d)?(?:\.\d+)?%?)/g)
       .map((part, i) => (i % 2 ? `<mark>${escapeHtml(part)}</mark>` : escapeHtml(part))).join("");
   }
+  // Models write a little markdown - **bold**, "### " headings, "- " bullets.
+  // Rendered, not shown raw; nothing else is interpreted, so a model cannot
+  // put markup on the page. Line breaks survive through white-space: pre-line.
+  function renderRich(text) {
+    return String(text ?? "").split("\n").map((line) => {
+      const heading = line.match(/^\s{0,3}#{1,6}\s+(.*)$/);
+      const body = (heading ? heading[1] : line).replace(/^(\s*)[-*]\s+/, "$1• ");
+      const html = body.split(/(\*\*[^*\n]+\*\*)/g).map((part) =>
+        /^\*\*[^*\n]+\*\*$/.test(part) ? `<strong>${markNumbers(part.slice(2, -2))}</strong>` : markNumbers(part)).join("");
+      return heading ? `<strong class="h">${html}</strong>` : html;
+    }).join("\n");
+  }
   // A tool call, described the way a person would describe the work.
   function describe(call) {
     const a = call.arguments || {};
@@ -851,7 +865,7 @@
       <article class="answer-card" aria-label="Answer">
         <div class="byline">${d.model ? `<span class="badge">${icon("sparkles")}${escapeHtml(d.model)}</span>` : ""}<span>${calls.length} steps · ${seconds}s</span>${fixes}</div>
         ${notice}
-        <p class="answer">${markNumbers(d.answer)}</p>
+        <p class="answer">${renderRich(d.answer)}</p>
       </article>
       ${d.result ? `<section class="field" aria-label="The numbers behind it"><h3 class="section-title">${icon("table", "sm")}The numbers behind it<span class="spacer"></span><button class="btn small ghost" type="button" id="copy-csv">${icon("copy", "sm")}Copy as CSV</button></h3>${gridHtml(d.result)}</section>` : ""}
       <details class="block"${d.succeeded && d.stop_reason !== "partial_answer" ? "" : " open"}>
