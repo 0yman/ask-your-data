@@ -14,7 +14,7 @@ emissions by country), or drop in your own CSV and Excel files.
 with nothing to install and no key needed. The first visit after a quiet spell can take
 about a minute while the free server wakes up.
 
-![Asking about an uploaded Excel file: a written answer with its figures highlighted, and the table of results behind it](docs/screenshot.png)
+![The live demo: Ministral 14B answering a trap question on 541,909 real sales - total revenue without returns or cancellations - with the figure marked, the rows behind it, each step, and the SQL it wrote](docs/screenshot.png)
 
 ---
 
