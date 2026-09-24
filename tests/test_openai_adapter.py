@@ -154,3 +154,58 @@ class TestBackendSelection:
 
         with pytest.raises(ValueError, match="Unknown LLM backend"):
             get_llm(settings.model_copy(update={"llm_backend": "llama"}))
+
+
+class TestModelFallback:
+    """Groq limits each model separately: a busy model hands over to the next."""
+
+    def make(self, settings, behaviour, fallbacks=("backup",)):
+        from agent.llm import OpenAICompatibleLLM
+
+        tried = []
+
+        def create(**kwargs):
+            tried.append(kwargs["model"])
+            outcome = behaviour(kwargs["model"], len(tried))
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        llm = OpenAICompatibleLLM.__new__(OpenAICompatibleLLM)
+        llm._settings = settings.model_copy(update={
+            "openai_fallback_models": list(fallbacks), "retry_base_delay": 0.0,
+        })
+        llm._model = "main"
+        llm.last_model = "main"
+        llm._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        return llm, tried
+
+    def test_a_rate_limited_model_hands_over_at_once(self, settings):
+        def behaviour(model, n):
+            if model == "main":
+                return RuntimeError("429 rate limit reached: tokens per day")
+            return fake_response(content="from backup")
+
+        llm, tried = self.make(settings, behaviour)
+        response = llm.complete("sys", [Message(role="user", content="q")], [])
+        assert response.text == "from backup"
+        assert tried == ["main", "backup"]
+        assert llm.last_model == "backup"
+
+    def test_the_main_model_is_tried_first_every_time(self, settings):
+        llm, tried = self.make(settings, lambda model, n: fake_response(content=model))
+        llm.complete("sys", [Message(role="user", content="q")], [])
+        llm.complete("sys", [Message(role="user", content="q")], [])
+        assert tried == ["main", "main"]
+
+    def test_real_errors_are_not_retried_on_another_model(self, settings):
+        llm, tried = self.make(settings, lambda model, n: RuntimeError("400 invalid request"))
+        with pytest.raises(RuntimeError, match="400"):
+            llm.complete("sys", [Message(role="user", content="q")], [])
+        assert tried == ["main"]
+
+    def test_when_every_model_is_busy_it_backs_off_and_gives_up(self, settings):
+        llm, tried = self.make(settings, lambda model, n: RuntimeError("503 overloaded"))
+        with pytest.raises(RuntimeError, match="503"):
+            llm.complete("sys", [Message(role="user", content="q")], [])
+        assert tried == ["main", "backup"] * settings.max_retries

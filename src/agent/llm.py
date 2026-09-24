@@ -213,6 +213,7 @@ class OpenAICompatibleLLM(LLMClient):
         )
         self._model = settings.openai_model
         self.name = self._model
+        self.last_model = self._model
 
     def complete(
         self, system: str, messages: Sequence[Message], tools: Sequence[ToolSpec]
@@ -239,18 +240,47 @@ class OpenAICompatibleLLM(LLMClient):
         return _from_openai(self._call_with_retry(kwargs))
 
     def _call_with_retry(self, kwargs: dict[str, Any]):
+        """Try each model in turn; back off only when all of them are busy.
+
+        Rate limits on hosts like Groq are per model, so a second model is a
+        second quota: when the first is out of tokens for the minute - or the
+        day - the next answers at once instead of the visitor waiting.
+        """
         settings = self._settings
+        models = [self._model] + [m for m in settings.openai_fallback_models if m != self._model]
+        last: Exception | None = None
         for attempt in range(settings.max_retries):
-            try:
-                return self._client.chat.completions.create(**kwargs)
-            except Exception as exc:
-                if not is_retryable(exc) or attempt == settings.max_retries - 1:
-                    raise
-                delay = settings.retry_base_delay * (2**attempt)
-                delay += random.uniform(0, delay * 0.25)
-                logger.warning("OpenAI call failed (%s); retrying in %.1fs", exc, delay)
-                time.sleep(delay)
-        raise RuntimeError("Unreachable retry state")
+            for model in models:
+                try:
+                    response = self._client.chat.completions.create(**{**kwargs, "model": model})
+                    self.last_model = model
+                    return response
+                except Exception as exc:
+                    if not is_retryable(exc):
+                        raise
+                    last = exc
+                    logger.warning("%s unavailable (%s)", model, str(exc)[:160])
+            if attempt == settings.max_retries - 1:
+                break
+            delay = settings.retry_base_delay * (2**attempt)
+            delay += random.uniform(0, delay * 0.25)
+            # A per-minute token limit says exactly how long to wait;
+            # guessing shorter just spends a retry.
+            delay = max(delay, min(_retry_after(last), 60.0))
+            logger.warning("All models busy; retrying in %.1fs", delay)
+            time.sleep(delay)
+        assert last is not None
+        raise last
+
+
+def _retry_after(exc: Exception) -> float:
+    """Seconds the server asked us to wait, from a Retry-After header; 0 if none."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    try:
+        return max(0.0, float(headers.get("retry-after", 0)))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _to_openai(messages: Sequence[Message]) -> list[dict[str, Any]]:

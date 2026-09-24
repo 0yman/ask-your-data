@@ -111,7 +111,7 @@ server there are strangers, so four things change:
 |---|---|---|
 | Uploaded files | yours, kept | a private workspace per visitor, deleted after an hour idle |
 | The AI key | saved to `.env` from the page | the server's key, held as a secret; visitors may add their own for their visit only, never written |
-| Questions | unlimited | 30 per visitor per hour and 250 a day in total on the server's key, 3 at a time; own-key visitors are not counted |
+| Questions | unlimited | on the server's key, per visitor per hour and per day in total, a few at a time - sized to the model's free tier (live: 10, 35, one at a time); own-key visitors are not counted |
 | Files | 50 MB | 10 MB, 5 tables per visitor; Excel files that unpack to 100x their size are refused |
 
 A visitor's workspace is found by a random token the page sends in a header,
@@ -390,6 +390,43 @@ only because no omitted row affected those two questions. Right answers, fragile
 method: exactly the kind of thing the "The SQL it wrote" panel is there to show.
 
 Full answers: [`eval/user_data/results.md`](eval/user_data/results.md).
+
+### Why the live demo runs on Qwen, not Gemini
+
+Deployed, the free Gemini tier failed visitors: the server logs were a wall of
+`503 This model is currently experiencing high demand` - Google's capacity, not
+this app's quota, so no retry policy fixes it. Groq's free tier serves open
+models on the same OpenAI wire format, so switching is configuration, not code.
+Two candidates, the same seventeen questions:
+
+| Model (free tier) | Correct | Plain | Traps | Declined | Mean time |
+|---|---|---|---|---|---|
+| `gemini-3.1-flash-lite` (Google) | 17/17 | 8/8 | 6/6 | 3/3 | 14s |
+| **`qwen3.8-27b` (Groq)** | **16/17** | 8/8 | 5/6 | 3/3 | 40s |
+| `gpt-oss-120b` (Groq) | 4/17 | 2/8 | 0/6 | 2/3 | 53s |
+
+gpt-oss did not reason worse; it went silent. After a tool result it returned
+an empty message in 13 of 17 questions, and a nudge to answer got another
+empty one. Its reasoning trace shows why that is not the model's judgement:
+*"We have answer: 38 distinct countries. Provide final answer."* - followed by
+no content and no tool call, three times in three at every setting tried
+(temperature 0 and 1, low reasoning effort, JSON tool results; forcing a tool
+call is rejected with *model did not call a tool*). The answer is lost between
+the model and the host, where no prompt reaches it.
+
+Qwen's one miss is the costliest trap: it summed every row of the CO2 table for
+"global emissions", World and continents included, and reported 226,123 Mt -
+6.4x the real 35,158. Its mean time is inflated by the free tier's 7-8K
+tokens-per-minute limit, which the evaluation hit repeatedly; a single question
+takes 3-5K tokens and usually 2-3 model calls.
+
+That limit shapes the demo: about 35 questions a day in total, one at a time.
+The adapter can fall back to a second model when the first is rate-limited -
+on Groq each model has its own quota - but that is only worth turning on with
+a second model that actually answers.
+
+Full answers: [`results_qwen3.8-27b.md`](eval/user_data/results_qwen3.8-27b.md),
+[`results_gpt-oss-120b.md`](eval/user_data/results_gpt-oss-120b.md).
 
 ### Reproduce
 

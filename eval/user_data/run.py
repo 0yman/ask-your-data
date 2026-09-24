@@ -156,7 +156,8 @@ def main() -> int:
 
     report = summarise(rows)
     args.json_out.write_text(json.dumps({"summary": report, "rows": rows}, indent=2), encoding="utf-8")
-    args.out.write_text(markdown(report, rows, settings.gemini_model), encoding="utf-8")
+    model = settings.openai_model if settings.llm_backend == "openai" else settings.gemini_model
+    args.out.write_text(markdown(report, rows, model), encoding="utf-8")
     print(f"\n{report['correct']}/{report['total']} correct  |  plain {report['by_kind'].get('plain','-')}  "
           f"trap {report['by_kind'].get('trap','-')}  unanswerable {report['by_kind'].get('unanswerable','-')}")
     return 0

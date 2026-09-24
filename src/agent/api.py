@@ -199,7 +199,10 @@ def _client_address(request: Request) -> str:
 
 def _engine_label(settings: Settings) -> str:
     if settings.llm_backend == "openai":
-        return "OpenAI-compatible model"
+        model = settings.openai_model.split("/")[-1]
+        if "groq.com" in settings.openai_base_url:
+            return f"Groq · {model}"
+        return model if settings.openai_base_url else f"OpenAI · {model}"
     if settings.llm_backend == "gemini":
         return "Google Gemini"
     return settings.llm_backend

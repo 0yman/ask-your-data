@@ -89,6 +89,13 @@ GENERIC_PROMPT_TEMPLATE = """You are a data analyst. You answer questions by que
 5. If the data genuinely cannot answer the question, say so in `final_answer` and explain what is missing. Do not invent a number."""
 
 
+# Sent once when the model returns an empty turn. Not part of the system
+# prompt, so the evaluated port prompt stays byte-identical.
+EMPTY_REPLY_NUDGE = (
+    "Your last reply was empty. Using the query results above, give the answer "
+    "now with the final_answer tool."
+)
+
 @dataclass(slots=True)
 class Step:
     index: int
@@ -193,6 +200,7 @@ class PortAnalystAgent:
         answer: str | None = None
         stop_reason = "max_steps"
         failed_attempts = 0
+        nudged = False
 
         for index in range(1, settings.max_steps + 1):
             step_started = time.perf_counter()
@@ -205,6 +213,15 @@ class PortAnalystAgent:
             )
             for key, value in response.usage.items():
                 usage[key] = usage.get(key, 0) + value
+
+            if not response.wants_tools and not response.text and not nudged:
+                # An empty turn - no text, no tool call. gpt-oss does this
+                # after a tool result now and then; one nudge gets the answer
+                # it already has, where stopping would throw the work away.
+                steps.append(step)
+                messages.append(Message(role="user", content=EMPTY_REPLY_NUDGE))
+                nudged = True
+                continue
 
             if not response.wants_tools:
                 # The model answered in prose without calling final_answer.

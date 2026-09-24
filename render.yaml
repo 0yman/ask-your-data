@@ -10,8 +10,24 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
+      # Groq's free tier (OpenAI-compatible) answers; see "Why the live demo
+      # runs on Qwen" in the README. GOOGLE_API_KEY is kept for visitors'
+      # own keys and as a way back.
+      - key: OPENAI_API_KEY
+        sync: false
       - key: GOOGLE_API_KEY
         sync: false
+      - key: AGENT_LLM_BACKEND
+        value: openai
+      - key: AGENT_OPENAI_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: AGENT_OPENAI_MODEL
+        value: qwen/qwen3.8-27b
+      # 200K tokens a day at 3-5K per question, with headroom.
+      - key: AGENT_PUBLIC_QUESTIONS_PER_DAY
+        value: "35"
+      - key: AGENT_PUBLIC_QUESTIONS_PER_HOUR
+        value: "10"
       - key: AGENT_PUBLIC_MODE
         value: "true"
       # The free instance has 512 MB. Measured: six visitors running heavy
@@ -19,5 +35,6 @@ services:
       # needed more failed on its own instead of taking the server down.
       - key: AGENT_DUCKDB_MEMORY_LIMIT
         value: 160MB
+      # 7-8K tokens a minute: one question at a time, the rest queue.
       - key: AGENT_PUBLIC_CONCURRENT_QUESTIONS
-        value: "2"
+        value: "1"

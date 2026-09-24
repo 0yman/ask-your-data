@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # the same, so the adapter does not change.
     openai_base_url: str = ""
     openai_model: str = "gpt-4o-mini"
+    # Tried in order when the main model is rate-limited or overloaded. On
+    # Groq each model has its own quota, so this multiplies capacity.
+    # From the environment as JSON: AGENT_OPENAI_FALLBACK_MODELS='["qwen/qwen3.8-27b"]'
+    openai_fallback_models: list[str] = []
     # Chosen by measurement, not by version number: on the free tier the
     # larger flash models are frequently 503 "high demand", while flash-lite
     # answered 3 probes in 4 at roughly a fifth of the latency. See the README.

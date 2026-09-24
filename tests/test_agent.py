@@ -218,3 +218,28 @@ class TestMessages:
     def test_tool_calls_get_distinct_ids(self):
         first, second = ToolCall("a", {}), ToolCall("a", {})
         assert first.id != second.id
+
+
+def test_an_empty_turn_gets_one_nudge_then_the_answer(settings, warehouse):
+    from agent.agent import EMPTY_REPLY_NUDGE, PortAnalystAgent
+    from agent.llm import LLMResponse, ScriptedLLM, ToolCall
+
+    llm = ScriptedLLM([
+        LLMResponse(tool_calls=[ToolCall("run_sql", {"sql": "SELECT COUNT(*) FROM dim_berth"})]),
+        LLMResponse(),  # empty: no text, no tool call
+        LLMResponse(tool_calls=[ToolCall("final_answer", {"answer": "There are 3 berths."})]),
+    ])
+    result = PortAnalystAgent(warehouse, llm, settings).ask("How many berths?")
+    assert result.answer == "There are 3 berths."
+    assert result.stop_reason == "final_answer"
+    assert llm.calls[-1][-1].content == EMPTY_REPLY_NUDGE
+
+
+def test_a_second_empty_turn_is_not_nudged_forever(settings, warehouse):
+    from agent.agent import PortAnalystAgent
+    from agent.llm import LLMResponse, ScriptedLLM
+
+    llm = ScriptedLLM([LLMResponse(), LLMResponse(), LLMResponse()])
+    result = PortAnalystAgent(warehouse, llm, settings).ask("How many berths?")
+    assert result.stop_reason == "text_answer"
+    assert len(llm.calls) == 2
