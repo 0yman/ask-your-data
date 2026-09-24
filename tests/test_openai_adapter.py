@@ -209,3 +209,10 @@ class TestModelFallback:
         with pytest.raises(RuntimeError, match="503"):
             llm.complete("sys", [Message(role="user", content="q")], [])
         assert tried == ["main", "backup"] * settings.max_retries
+
+
+def test_backoff_never_waits_longer_than_the_cap():
+    from agent.llm import MAX_BACKOFF_SECONDS, backoff_delay
+
+    assert backoff_delay(2.0, 0) < 2.6
+    assert all(backoff_delay(2.0, attempt) <= MAX_BACKOFF_SECONDS * 1.25 for attempt in range(20))

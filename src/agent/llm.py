@@ -170,8 +170,7 @@ class GeminiLLM(LLMClient):
             except Exception as exc:
                 if not is_retryable(exc) or attempt == settings.max_retries - 1:
                     raise
-                delay = settings.retry_base_delay * (2**attempt)
-                delay += random.uniform(0, delay * 0.25)  # jitter avoids lockstep retries
+                delay = backoff_delay(settings.retry_base_delay, attempt)
                 logger.warning("Gemini call failed (%s); retrying in %.1fs", exc, delay)
                 time.sleep(delay)
         raise RuntimeError("Unreachable retry state")
@@ -262,15 +261,25 @@ class OpenAICompatibleLLM(LLMClient):
                     logger.warning("%s unavailable (%s)", model, str(exc)[:160])
             if attempt == settings.max_retries - 1:
                 break
-            delay = settings.retry_base_delay * (2**attempt)
-            delay += random.uniform(0, delay * 0.25)
-            # A per-minute token limit says exactly how long to wait;
-            # guessing shorter just spends a retry.
-            delay = max(delay, min(_retry_after(last), 60.0))
+            # A per-minute token limit says exactly how long to wait: waiting
+            # less spends a retry, waiting more keeps a visitor staring.
+            server = _retry_after(last)
+            delay = min(server + random.uniform(0.5, 1.5), MAX_BACKOFF_SECONDS) if server                 else backoff_delay(settings.retry_base_delay, attempt)
             logger.warning("All models busy; retrying in %.1fs", delay)
             time.sleep(delay)
         assert last is not None
         raise last
+
+
+# No single wait longer than this. Doubling from 2s passes a minute by the
+# sixth retry; beyond that a visitor has given up and the quota window has
+# long since moved.
+MAX_BACKOFF_SECONDS = 30.0
+
+
+def backoff_delay(base: float, attempt: int) -> float:
+    delay = min(base * (2**attempt), MAX_BACKOFF_SECONDS)
+    return delay + random.uniform(0, delay * 0.25)  # jitter avoids lockstep retries
 
 
 def _retry_after(exc: Exception) -> float:
