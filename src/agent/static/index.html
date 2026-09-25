@@ -655,6 +655,7 @@
     unknown_table: "that table does not exist, so it looked again",
     timeout: "took too long and was stopped",
     bad_arguments: "was called incorrectly",
+    ungrounded: "a figure in it was in no query result, so it checked again",
   };
 
   // ---------- data ----------
@@ -905,6 +906,10 @@
         trail("wait", "clock", `Paused ${ev.seconds}s for the free model's rate limit`);
         progress.waitUntil = Date.now() + ev.seconds * 1000; paintNow(); break;
       case "salvage": setNow("Out of attempts: answering from the queries that worked…"); break;
+      case "recheck":
+        trail("fail", "alert", "Checked the answer's figures against the results", `not found: ${ev.figures.join(", ")}`);
+        setNow("Checking those figures…");
+        break;
       case "plan":
         progress.parts = ev.parts.length;
         $("plan-list").innerHTML = ev.parts.map((q) => `<li><span>${escapeHtml(q)}</span></li>`).join("");

@@ -156,6 +156,103 @@ def pick_by_vote(results: list[AgentResult]) -> tuple[int, int]:
     return best, sum(agree(best, j) for j in finished)
 
 
+# Sent once when a final answer carries figures that are in no query result,
+# no query and not in the question: numbers worked out in the model's head, or
+# misread. Checking this in code costs nothing when the answer is grounded -
+# a model reviewing itself (planning.py's verifier) cost more than it caught.
+GROUNDING_NUDGE = (
+    "Before this answer is shown: these figures in it are not in any query "
+    "result above - {figures}. If they come from a result, copy them exactly; "
+    "if you worked them out yourself, compute them with a query instead. Then "
+    "call final_answer again."
+)
+# A figure matches a result value within its own rounding, at any of these
+# scales: "22.2 billion" for 22,237.81 million, "49.3%" for 0.493.
+_SCALES = (1.0, 1e3, 1e-3, 1e6, 1e-6, 1e9, 1e-9, 100.0, 0.01)
+
+
+def _numbers(text: str) -> list[float]:
+    found = []
+    for piece in _FIGURE.findall(text or ""):
+        try:
+            found.append(abs(float(piece.replace(",", ""))))
+        except ValueError:
+            continue
+    return found
+
+
+def _known_numbers(question: str, results: list[QueryResult]) -> list[float]:
+    known = _numbers(question)
+    for result in results:
+        known += _numbers(result.sql)
+        for row in result.rows:
+            for value in row:
+                if isinstance(value, bool) or value is None:
+                    continue
+                if isinstance(value, str):
+                    known += _numbers(value)
+                    continue
+                try:
+                    known.append(abs(float(value)))
+                except (TypeError, ValueError):
+                    continue
+    return known
+
+
+def ungrounded_figures(answer: str, question: str, results: list[QueryResult]) -> list[str]:
+    """Figures in `answer` found in no query result, no query and not in the
+    question. Years and counts up to 10 are left alone: they come from the
+    question's own framing as often as from a result."""
+    known = _known_numbers(question, results)
+    loose = []
+    for piece in _FIGURE.findall(answer or ""):
+        try:
+            value = abs(float(piece.replace(",", "")))
+        except ValueError:
+            continue
+        if value.is_integer() and (value <= 10 or 1900 <= value <= 2100):
+            continue
+        decimals = len(piece.split(".")[1]) if "." in piece else 0
+        tolerance = 0.5 * 10 ** -decimals
+        if not any(abs(value - k * scale) <= tolerance for k in known for scale in _SCALES):
+            loose.append(piece)
+    return loose
+
+
+def _digits(text: str) -> str:
+    return re.sub(r"\D", "", text).lstrip("0")
+
+
+def _edits(a: str, b: str) -> int:
+    """Levenshtein distance between two short digit strings."""
+    previous = list(range(len(b) + 1))
+    for i, x in enumerate(a, start=1):
+        current = [i]
+        for j, y in enumerate(b, start=1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (x != y)))
+        previous = current
+    return previous[-1]
+
+
+def nearest_result_value(figure: str, question: str, results: list[QueryResult]) -> str | None:
+    """The result value a long figure was probably copied from, when it is
+    one or two digits off - "1,064,456.42" for 10,644,560.42. In stored runs
+    the model, told only that a figure was wrong, wrote another wrong one."""
+    wanted = _digits(figure)
+    if len(wanted) < 5:
+        return None
+    best, best_edits = None, 3
+    for value in _known_numbers(question, results):
+        shown = f"{value:,.4f}".rstrip("0").rstrip(".")
+        digits = _digits(shown)
+        if abs(len(digits) - len(wanted)) > 2:
+            continue
+        edits = _edits(wanted, digits)
+        if 0 < edits < best_edits:
+            best, best_edits = shown, edits
+    return best
+
+
 def drop_unstated_currency(answer: str, question: str, schema: str) -> str:
     """Take the currency symbol off figures when neither the question nor any
     table or column name says which currency the data is in. A column such as
@@ -353,6 +450,7 @@ class PortAnalystAgent:
         # sub-queries can fix one in each and still be on track.
         failed_in_a_row = 0
         nudged = False
+        rechecked = False
         failed_ids: set[str] = set()
 
         for index in range(1, (max_steps or settings.max_steps) + 1):
@@ -393,7 +491,22 @@ class PortAnalystAgent:
             finished = False
             for call in response.tool_calls:
                 if call.name == FINAL_ANSWER_TOOL:
-                    answer = str(call.arguments.get("answer", "")).strip()
+                    draft = str(call.arguments.get("answer", "")).strip()
+                    loose = [] if rechecked or index == (max_steps or settings.max_steps) else (
+                        ungrounded_figures(draft, question, toolbox.executed_queries))
+                    if loose:
+                        rechecked = True
+                        logger.warning("Answer figures in no query result: %s - asked to recheck", ", ".join(loose))
+                        step.tool_calls.append({"name": call.name, "arguments": call.arguments,
+                                                "ok": False, "error_kind": "ungrounded"})
+                        messages.append(Message(role="tool", tool_name=call.name, tool_call_id=call.id,
+                                                content=GROUNDING_NUDGE.format(figures=", ".join(
+                                                    f"{f} (a result has {near})" if (near := nearest_result_value(
+                                                        f, question, toolbox.executed_queries)) else f
+                                                    for f in loose))))
+                        emit({"type": "recheck", "figures": loose})
+                        break
+                    answer = draft
                     step.tool_calls.append(
                         {"name": call.name, "arguments": call.arguments, "ok": True}
                     )

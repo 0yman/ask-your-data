@@ -118,6 +118,22 @@ MAX_RESULT_CHARS = 6000
 LONG_QUERY_LINES = 15
 
 
+# DuckDB errors a model tends to repeat until it gives up, with what to do
+# instead. The scalar-subquery one ended whole questions in stored evaluation
+# runs (21 of the final errors seen): the model resubmitted the same shape of
+# query four times. Only a failing query ever sees these.
+_ERROR_HINTS = (
+    ("More than one row returned by a subquery",
+     "A subquery used as a single value returned several rows. Match it to the "
+     "outer row (e.g. WHERE inner.year = outer.year), or JOIN the two sets on "
+     "their key, or aggregate inside the subquery so it returns one row."),
+)
+
+
+def _error_hint(message: str) -> str:
+    return "".join(f"\n\n{hint}" for needle, hint in _ERROR_HINTS if needle in message)
+
+
 def _split_hint(sql: Any) -> str:
     if str(sql).count("\n") + 1 < LONG_QUERY_LINES:
         return ""
@@ -231,7 +247,7 @@ class ToolBox:
             # Genuine SQL errors - a wrong column, a bad join - land here and
             # are the most valuable thing the agent can be told.
             return ToolOutcome(
-                content=f"SQL error: {exc}\n\nCheck the schema and try again.{_split_hint(sql)}",
+                content=f"SQL error: {exc}{_error_hint(str(exc))}\n\nCheck the schema and try again.{_split_hint(sql)}",
                 ok=False,
                 error_kind="sql_error",
             )

@@ -641,6 +641,41 @@ the time, and a demo that two simultaneous visitors could push into the
 limit. It stays in the code, off (`AGENT_VOTE_RUNS`, default 1); a run lost to
 the host no longer sinks the question when another run answered.
 
+### Checking the answer's figures in code
+
+Two checks that only act when something is already wrong, so a clean answer
+goes through untouched:
+
+- **Figures from nowhere.** Before an answer is accepted, every figure in it
+  must appear in a query result, a query or the question, allowing for
+  rounding and a change of unit ("22.2 billion" for 22,237.81 million, "49.3%"
+  for 0.493). If some do not, the model is told which, once, and answers
+  again. When a long figure is a digit or two off a result value, the message
+  names that value: in the first session the check caught "1,064,456.42" for
+  10,644,560.42, and the model, told only that it was wrong, wrote another
+  wrong number. The page shows the check in the answer's steps.
+- **A way out of a repeated error.** "More than one row returned by a
+  subquery" ended whole questions: the model resubmitted the same shape of
+  query until it gave up. That error now comes with what to do instead.
+
+Two sessions, each interleaved with the committed code:
+
+| Ministral 14B, 3 runs each | Committed code | + the checks |
+|---|---|---|
+| Session 1, real set (of 17) | 17.0 | 16.3 |
+| Session 1, hard set (of 12) | 8.7 | **10.0** |
+| Session 2 (names the nearest value), real set | 17.0 | 17.0 |
+| Session 2, hard set | 8.3 | **9.3** |
+
+Session 1's real-set loss is the mis-copied figure above, which is what
+session 2's version answers. The figure check fired on 9 to 11 of 87
+answers a session. It fixed h10's figures, and it flagged h2's percentage in
+every run without fixing it: the model recomputed it the same wrong way.
+Note what the committed code scored on the hard set across the day's
+sessions, from 8.3 to 10.7 with nothing changed: a difference of one hard
+question is inside that noise, so the claim here rests on the gain repeating
+in both sessions, not on either one.
+
 ### Reproduce
 
 ```bash
@@ -745,7 +780,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-215 tests, no network, no API key, under 15 seconds. The suite builds a
+227 tests, no network, no API key, under 15 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

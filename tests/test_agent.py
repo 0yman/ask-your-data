@@ -397,7 +397,8 @@ class TestCurrencyTheDataNeverStated:
 
     def test_the_port_data_names_its_currency(self, agent_factory):
         # fact_container_movement has demurrage_usd.
-        result = agent_factory([answer("Demurrage came to $1,250.")]).ask("How much demurrage?")
+        result = agent_factory([call("run_sql", sql="SELECT 1250 AS demurrage_usd"),
+                                answer("Demurrage came to $1,250.")]).ask("How much demurrage?")
         assert result.answer == "Demurrage came to $1,250."
 
     def test_data_without_a_currency_gets_plain_figures(self, settings, tmp_path):
@@ -522,3 +523,82 @@ class TestGroupValuesInTheSchema:
     def test_a_product_named_world_is_not_a_group(self, tmp_path):
         text = self.summary(tmp_path, "CREATE TABLE items AS SELECT 'WORLD WAR 2 GLIDERS' AS Description, 2 AS Quantity")
         assert text == "items (1 rows): Description VARCHAR, Quantity INTEGER"
+
+
+class TestAnswerFiguresAreGrounded:
+    """A figure in the answer must come from a result, a query or the
+    question - within rounding and a change of unit - or it is sent back once."""
+
+    @staticmethod
+    def result(rows, sql="SELECT 1"):
+        from agent.warehouse import QueryResult
+
+        return QueryResult(sql=sql, columns=["v"], rows=rows, row_count=len(rows), truncated=False, elapsed_ms=1.0)
+
+    @pytest.mark.parametrize("answer_text", [
+        "Revenue was 284,661.54.",
+        "About 284,662 in all.",
+        "Asia emitted 22.2 billion tonnes.",          # 22,237.81 million
+        "That is 49.3% of the total.",                 # 0.4934
+        "It fell by 967.8 tonnes.",                    # -967.8
+        "In 2011, 3 countries led.",                   # a year and a small count
+        "StockCode 23843 sold most.",                  # a number inside a text value
+    ])
+    def test_figures_from_the_results_pass(self, answer_text):
+        from agent.agent import ungrounded_figures
+
+        results = [self.result([(284661.54,), (22237.81,), (0.4934,), (-967.8,), ("23843",)])]
+        assert ungrounded_figures(answer_text, "Which country?", results) == []
+
+    def test_a_figure_from_nowhere_is_named(self):
+        from agent.agent import ungrounded_figures
+
+        results = [self.result([(284661.54,)])]
+        assert ungrounded_figures("Revenue was 284,661.54, up 12.5% on 2010.", "q", results) == ["12.5"]
+        assert ungrounded_figures("Over 100 million people.", "Countries over 100 million?", []) == []
+
+    def test_an_ungrounded_answer_is_sent_back_once(self, agent_factory):
+        agent = agent_factory([
+            call("run_sql", sql="SELECT COUNT(*) AS calls FROM fact_vessel_call"),
+            answer("There are 40 calls, 12.5% of them late."),
+            answer("There are 4 calls."),
+        ])
+        events = []
+        result = agent.ask("How many vessel calls?", on_event=events.append)
+        assert result.answer == "There are 4 calls."
+        assert {"type": "recheck", "figures": ["40", "12.5"]} in events
+        rechecked = [c for s in result.steps for c in s.tool_calls if c.get("error_kind") == "ungrounded"]
+        assert len(rechecked) == 1
+
+    def test_the_second_answer_stands_even_if_still_loose(self, agent_factory):
+        agent = agent_factory([answer("There are 40 calls."), answer("There are 41 calls.")])
+        assert agent.ask("How many vessel calls?").answer == "There are 41 calls."
+
+
+def test_a_multi_row_scalar_subquery_gets_a_way_out(warehouse):
+    outcome = ToolBox(warehouse=warehouse).dispatch(
+        "run_sql", {"sql": "SELECT (SELECT berth_code FROM dim_berth) AS b"})
+    assert not outcome.ok
+    assert "Match it to the outer row" in outcome.content
+
+
+def test_a_miscopied_figure_is_shown_the_value_it_came_from(agent_factory):
+    from agent.agent import nearest_result_value
+    from agent.warehouse import QueryResult
+
+    results = [QueryResult(sql="SELECT 1", columns=["revenue"], rows=[(10644560.42,), (9747747.93,)],
+                           row_count=2, truncated=False, elapsed_ms=1.0)]
+    assert nearest_result_value("1,064,456.42", "q", results) == "10,644,560.42"
+    assert nearest_result_value("3,142,905.42", "q", results) is None     # nothing close: no guess
+    assert nearest_result_value("12.5", "q", results) is None             # too short to judge
+
+    llm_messages = []
+    agent = agent_factory([
+        call("run_sql", sql="SELECT 10644560.42 AS revenue"),
+        answer("Revenue was 1,064,456.42."),
+        answer("Revenue was 10,644,560.42."),
+    ])
+    result = agent.ask("What was the revenue?")
+    llm_messages = agent.llm.calls[-1]
+    assert "1,064,456.42 (a result has 10,644,560.42)" in llm_messages[-1].content
+    assert result.answer == "Revenue was 10,644,560.42."
