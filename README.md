@@ -559,6 +559,37 @@ across runs, against 0.92-0.97 before); strict execution accuracy fell from
 (a month name beside the month number), so the result set no longer matches
 the gold one exactly while the figures in the answer still do.
 
+### A currency the data never stated
+
+The UK shop's prices carry no currency in the data - the column is
+`UnitPrice` - yet 18 of 63 stored answers on it put "$" or "£" in front of
+the figures, ten of them "$". A one-sentence rule in the prompt ("give a
+currency only when the data or the question states it") removed them, and
+was measured like everything above:
+
+| Ministral 14B, 3 runs | Shipped prompt | + currency rule |
+|---|---|---|
+| Money answers naming a currency the data never gave | 15 of 51 | 1 of 51 |
+| Real set (of 17) | 15.0 | 16.0 |
+| Hard set (of 12) | 9.7 | **7.3** |
+| Port strict execution accuracy (2 runs) | 0.40, 0.50 | 0.35, 0.45 |
+
+With the rule in its prompt the model changed more than its wording: on one
+hard question every run now computed net revenue differently, on another
+every run repeated the same failing subquery until it gave up. So the rule is
+not in the prompt. The finished answer passes through
+`drop_unstated_currency` instead: when no table or column name and nothing
+in the question names a currency, a symbol in front of a figure comes off.
+The port data has `demurrage_usd`, so port answers keep theirs. On the 63
+stored answers it removes all 18 symbols and changes no grade; the prompt is
+untouched, so the queries, and every number above, stay as they were.
+
+A second rule, to say whether a count is of rows or of orders, was dropped
+before the full runs: four counting probes
+([`counting_probes.jsonl`](eval/user_data/counting_probes.jsonl): cancelled
+orders, orders from Germany, customers in December 2010, average order value)
+already scored 12 of 12 without it.
+
 ### Reproduce
 
 ```bash
@@ -663,7 +694,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-196 tests, no network, no API key, under 15 seconds. The suite builds a
+205 tests, no network, no API key, under 15 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

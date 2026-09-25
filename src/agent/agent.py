@@ -19,6 +19,7 @@ numbers. Three things in here are the substance:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -111,6 +112,25 @@ EMPTY_REPLY_NUDGE = (
     "now with the final_answer tool."
 )
 
+# Models put a currency symbol in front of money figures whether or not the
+# data says which currency it is in: on the UK shop's sales, 18 of 63 stored
+# answers carried "$" or "£" with nothing in the data to back either. A
+# prompt rule fixed that but moved the hard set from 9.7 to 7.3 of 12 (the
+# model's SQL changed along with its wording), so the fix is here, applied to
+# the finished answer, where it cannot touch the queries.
+_CURRENCY_NAMED = re.compile(r"[$£€]|usd|eur|gbp|dollar|euro|pound|sterling|currency", re.IGNORECASE)
+_STRAY_CURRENCY = re.compile(r"[$£€]\s?(?=-?\d)")
+
+
+def drop_unstated_currency(answer: str, question: str, schema: str) -> str:
+    """Take the currency symbol off figures when neither the question nor any
+    table or column name says which currency the data is in. A column such as
+    `demurrage_usd` does say, and then the answer is left as it is."""
+    if not answer or _CURRENCY_NAMED.search(question) or _CURRENCY_NAMED.search(schema):
+        return answer
+    return _STRAY_CURRENCY.sub("", answer)
+
+
 @dataclass(slots=True)
 class Step:
     index: int
@@ -181,6 +201,9 @@ class PortAnalystAgent:
             if settings.include_schema_in_prompt
             else "(Not provided. Use list_tables and describe_table to discover it.)"
         )
+        # Table and column names, for drop_unstated_currency. Read on first
+        # use when the prompt does not carry them.
+        self._schema_text = schema if settings.include_schema_in_prompt else None
         if domain == "port":
             # Kept byte-for-byte: the published evaluation ran on this text.
             self._system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
@@ -218,10 +241,18 @@ class PortAnalystAgent:
             if self.settings.plan_questions or self.settings.verify_answers:
                 from .planning import ask_planned
 
-                return ask_planned(self, question, emit)
-            return self._ask(question, emit)
+                return self._tidy(question, ask_planned(self, question, emit))
+            return self._tidy(question, self._ask(question, emit))
         finally:
             llm.on_wait = None
+
+    def _tidy(self, question: str, result: AgentResult) -> AgentResult:
+        if self._schema_text is None:
+            self._schema_text = self.warehouse.schema_summary()
+        def tidy(text):
+            return drop_unstated_currency(text, question, self._schema_text)
+        return replace(result, answer=tidy(result.answer),
+                       parts=[{**part, "answer": tidy(part.get("answer"))} for part in result.parts])
 
     def _ask(
         self, question: str, emit: Callable[[dict[str, Any]], None], max_steps: int | None = None

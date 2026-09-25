@@ -366,3 +366,49 @@ def test_failures_in_a_row_still_stop_it(settings, warehouse):
     llm = _Recording([_sql("SELECT 1 AS ok")] + [_sql(BROKEN) for _ in range(settings.max_sql_retries + 1)])
     result = PortAnalystAgent(warehouse, llm, settings).ask("q")
     assert result.stop_reason == "partial_answer"   # stopped, then answered from the query that worked
+
+
+class TestCurrencyTheDataNeverStated:
+    """A "$" in front of a figure when nothing in the data says dollars is a
+    wrong fact, not a style choice. It comes off; a stated currency stays."""
+
+    SALES = "sales (3 rows): Country VARCHAR, Quantity BIGINT, UnitPrice DOUBLE"
+
+    @pytest.mark.parametrize(("written", "shown"), [
+        ("Revenue was $284,661.54.", "Revenue was 284,661.54."),
+        ("**£8,998,790.91** in 2011", "**8,998,790.91** in 2011"),
+        ("a loss of -€5 and $ 12", "a loss of -5 and 12"),
+        ("No figures here.", "No figures here."),
+    ])
+    def test_unstated_symbols_come_off(self, written, shown):
+        from agent.agent import drop_unstated_currency
+
+        assert drop_unstated_currency(written, "What was the revenue?", self.SALES) == shown
+
+    @pytest.mark.parametrize(("question", "schema"), [
+        ("What was the revenue?", "fees (1 rows): demurrage_usd DOUBLE"),
+        ("What was the revenue, in dollars?", SALES),
+        ("How many orders were over £100?", SALES),
+    ])
+    def test_a_stated_currency_is_left_alone(self, question, schema):
+        from agent.agent import drop_unstated_currency
+
+        assert drop_unstated_currency("It was $120.", question, schema) == "It was $120."
+
+    def test_the_port_data_names_its_currency(self, agent_factory):
+        # fact_container_movement has demurrage_usd.
+        result = agent_factory([answer("Demurrage came to $1,250.")]).ask("How much demurrage?")
+        assert result.answer == "Demurrage came to $1,250."
+
+    def test_data_without_a_currency_gets_plain_figures(self, settings, tmp_path):
+        import duckdb
+
+        path = tmp_path / "sales.duckdb"
+        with duckdb.connect(str(path)) as con:
+            con.execute("CREATE TABLE sales AS SELECT 'Netherlands' AS Country, 2 AS Quantity, 1.5 AS UnitPrice")
+        warehouse = Warehouse(path, max_rows=100, timeout_seconds=5)
+        try:
+            agent = PortAnalystAgent(warehouse, ScriptedLLM([answer("The Netherlands: $3.00.")]), settings, domain="user")
+            assert agent.ask("Which country spent most?").answer == "The Netherlands: 3.00."
+        finally:
+            warehouse.close()
