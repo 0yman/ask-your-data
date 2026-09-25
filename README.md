@@ -590,6 +590,57 @@ before the full runs: four counting probes
 orders, orders from Germany, customers in December 2010, average order value)
 already scored 12 of 12 without it.
 
+### Doing the looking for the model
+
+Results move between sessions even when nothing changes: the retail
+questions, whose prompt none of the work below touches, shifted by up to two
+correct answers from one session to the next. So from here each change ran
+**interleaved with the committed code**, rep by rep, in the same session, and
+is judged against that run rather than a stored one.
+
+The prompt tells the model to look for rows that are totals rather than single
+entities. On the CO2 data it did not: it added "World" to the countries for
+global emissions (c2, wrong in every run) and said the data had no continents
+(c6), while both sit in the `country` column. Now the schema says so itself.
+When a text column holds values such as `World`, `Asia`, `European Union (27)`
+or `High-income countries`, the schema summary lists them under the table, and
+says to leave them out when ranking or adding up single entities. A column
+without such values adds nothing, so the retail and port prompts are unchanged
+byte for byte.
+
+The first version showed six of the 28 values and "22 more"; the model guessed
+the rest and excluded the Democratic Republic of Congo as a group (h11). Listing
+all of them fixed that. With the full list, in the same session:
+
+| Ministral 14B, 3 interleaved runs | Committed code | + group values in the schema |
+|---|---|---|
+| Real set (of 17) | 15.0 (14, 16, 15) | **16.7** (17, 17, 16) |
+| Hard set (of 12) | 9.7 (10, 10, 9) | **10.7** (10, 11, 11) |
+| Seconds per question, real / hard | 8.6 / 14.6 | 8.0 / 13.2 |
+
+c2 and c6 went from wrong to right in all three runs.
+
+### Asking three times: measured, off
+
+The model often gets a question right in two runs of three, which is what
+self-consistency is for: answer it three times in parallel (the first at
+temperature 0, the others at 0.7) and keep the answer whose figures most runs
+agree on. It ran as a third arm of the same session:
+
+| | Group values, one run | + three runs, majority |
+|---|---|---|
+| Real set (of 17) | 16.7 | 15.3 |
+| Hard set (of 12) | 10.7 | 9.0 |
+| Questions lost to the host's rate limit | 0 of 87 | 11 of 87 |
+| Seconds per question, real / hard | 8.0 / 13.2 | 18.5 / 32.0 |
+
+Three runs at once exceed Mistral's free per-minute limit. On the questions
+it did finish, it was right on 46 of 46 real and 27 of 30 hard, against 50 of
+51 and 32 of 36 with one run: no gain worth three times the tokens, twice
+the time, and a demo that two simultaneous visitors could push into the
+limit. It stays in the code, off (`AGENT_VOTE_RUNS`, default 1); a run lost to
+the host no longer sinks the question when another run answered.
+
 ### Reproduce
 
 ```bash
@@ -694,7 +745,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-205 tests, no network, no API key, under 15 seconds. The suite builds a
+215 tests, no network, no API key, under 15 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

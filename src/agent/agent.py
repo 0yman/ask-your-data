@@ -18,10 +18,12 @@ numbers. Three things in here are the substance:
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -122,6 +124,38 @@ _CURRENCY_NAMED = re.compile(r"[$£€]|usd|eur|gbp|dollar|euro|pound|sterling|c
 _STRAY_CURRENCY = re.compile(r"[$£€]\s?(?=-?\d)")
 
 
+_FIGURE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+
+def _figures(answer: str) -> frozenset[str]:
+    """The numbers in an answer, to four significant digits, so "284,661.54"
+    and "284,662" count as the same figure."""
+    found = set()
+    for text in _FIGURE.findall(answer or ""):
+        try:
+            found.add(f"{float(text.replace(',', '')):.4g}")
+        except ValueError:
+            continue
+    return frozenset(found)
+
+
+def pick_by_vote(results: list[AgentResult]) -> tuple[int, int]:
+    """The run whose answer the most runs agree with, and how many agree
+    (itself included). Two answers agree when at least half of their figures
+    are shared; two answers with no figures (two declines) agree. Runs that
+    did not finish only count when none did. Ties go to the earliest run -
+    the one at the configured temperature."""
+    finished = [i for i, r in enumerate(results) if r.succeeded] or list(range(len(results)))
+    figures = {i: _figures(results[i].answer) for i in finished}
+
+    def agree(a: int, b: int) -> bool:
+        union = figures[a] | figures[b]
+        return not union or len(figures[a] & figures[b]) / len(union) >= 0.5
+
+    best = max(finished, key=lambda i: (sum(agree(i, j) for j in finished), -i))
+    return best, sum(agree(best, j) for j in finished)
+
+
 def drop_unstated_currency(answer: str, question: str, schema: str) -> str:
     """Take the currency symbol off figures when neither the question nor any
     table or column name says which currency the data is in. A column such as
@@ -159,6 +193,9 @@ class AgentResult:
     parts: list[dict[str, Any]] = field(default_factory=list)
     #: The verifier's verdict on the answer, when one ran.
     review: dict[str, Any] | None = None
+    #: With vote_runs > 1: how many runs answered, and how many of them
+    #: gave the figures of the answer kept.
+    votes: dict[str, int] | None = None
 
     @property
     def final_sql(self) -> str | None:
@@ -191,6 +228,7 @@ class PortAnalystAgent:
         llm: LLMClient | None,
         settings: Settings,
         domain: str = "port",
+        llm_factory: Callable[[Settings], LLMClient] | None = None,
     ) -> None:
         self.warehouse = warehouse
         self.settings = settings
@@ -201,6 +239,8 @@ class PortAnalystAgent:
             if settings.include_schema_in_prompt
             else "(Not provided. Use list_tables and describe_table to discover it.)"
         )
+        # Builds the clients for the extra vote_runs, at vote_temperature.
+        self._llm_factory = llm_factory
         # Table and column names, for drop_unstated_currency. Read on first
         # use when the prompt does not carry them.
         self._schema_text = schema if settings.include_schema_in_prompt else None
@@ -242,9 +282,49 @@ class PortAnalystAgent:
                 from .planning import ask_planned
 
                 return self._tidy(question, ask_planned(self, question, emit))
+            if self.settings.vote_runs > 1:
+                return self._tidy(question, self._ask_voted(question, emit))
             return self._tidy(question, self._ask(question, emit))
         finally:
             llm.on_wait = None
+
+    def _ask_voted(self, question: str, emit: Callable[[dict[str, Any]], None]) -> AgentResult:
+        """Self-consistency. The page follows the first run; the others work
+        quietly beside it. A run lost to a host error (a 429 on a free tier,
+        where three runs at once hit the per-minute limit) is left out; the
+        question fails only when every run does."""
+        from .llm import get_llm
+
+        started = time.perf_counter()
+        warm = self.settings.model_copy(update={"temperature": self.settings.vote_temperature})
+        runners = [self]
+        for _ in range(self.settings.vote_runs - 1):
+            twin = copy.copy(self)
+            twin.settings = warm
+            twin._llm = (self._llm_factory or get_llm)(warm)
+            runners.append(twin)
+
+        def run(index: int) -> AgentResult:
+            return runners[index]._ask(question, emit if index == 0 else (lambda event: None))
+
+        results: list[AgentResult] = []
+        first_error: Exception | None = None
+        with ThreadPoolExecutor(max_workers=len(runners)) as pool:
+            futures = [pool.submit(run, i) for i in range(len(runners))]
+            for index, future in enumerate(futures):
+                try:
+                    results.append(future.result())
+                except Exception as exc:         # noqa: BLE001 - the other runs may still answer
+                    logger.warning("Vote run %d failed: %s", index, exc)
+                    first_error = first_error or exc
+        if not results:
+            raise first_error
+
+        best, agreeing = pick_by_vote(results)
+        usage = {key: sum(r.usage.get(key, 0) for r in results) for key in ("prompt_tokens", "output_tokens")}
+        emit({"type": "vote", "runs": len(results), "agreeing": agreeing})
+        return replace(results[best], usage=usage, votes={"runs": len(results), "agreeing": agreeing},
+                       total_latency_ms=(time.perf_counter() - started) * 1000)
 
     def _tidy(self, question: str, result: AgentResult) -> AgentResult:
         if self._schema_text is None:

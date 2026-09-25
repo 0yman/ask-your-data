@@ -412,3 +412,113 @@ class TestCurrencyTheDataNeverStated:
             assert agent.ask("Which country spent most?").answer == "The Netherlands: 3.00."
         finally:
             warehouse.close()
+
+
+class TestVoting:
+    """Self-consistency: several runs, and the answer most of them agree on."""
+
+    @staticmethod
+    def result(text, succeeded=True):
+        from agent.agent import AgentResult
+
+        return AgentResult(question="q", answer=text, steps=[], sql_queries=[],
+                           stop_reason="final_answer" if succeeded else "max_steps",
+                           succeeded=succeeded, total_latency_ms=0.0, usage={})
+
+    def test_the_majority_wins_and_rounding_does_not_split_it(self):
+        from agent.agent import pick_by_vote
+
+        runs = [self.result("Total: 100."), self.result("Total: 284,661.54."), self.result("About 284,662 in all.")]
+        assert pick_by_vote(runs) == (1, 2)
+
+    def test_a_tie_goes_to_the_first_run(self):
+        from agent.agent import pick_by_vote
+
+        assert pick_by_vote([self.result("1 berth."), self.result("2 berths."), self.result("3 berths.")]) == (0, 1)
+
+    def test_two_declines_agree(self):
+        from agent.agent import pick_by_vote
+
+        runs = [self.result("The data has no rice-farming column."), self.result("Egypt: 46.5."),
+                self.result("That is not in the data.")]
+        assert pick_by_vote(runs) == (0, 2)
+
+    def test_runs_that_did_not_finish_do_not_vote(self):
+        from agent.agent import pick_by_vote
+
+        runs = [self.result("7 calls.", succeeded=False), self.result("9 calls."), self.result("7 calls.", succeeded=False)]
+        assert pick_by_vote(runs) == (1, 1)
+
+    def test_three_runs_in_parallel_keep_the_majority_answer(self, settings, warehouse):
+        count = "SELECT COUNT(*) AS calls FROM fact_vessel_call"
+        first = ScriptedLLM([call("run_sql", sql=count), answer("There are 250 calls.")])
+        others = iter([ScriptedLLM([call("run_sql", sql=count), answer("There are 4 calls.")]),
+                       ScriptedLLM([call("run_sql", sql=count), answer("4 calls in all.")])])
+        temperatures = []
+
+        def factory(warm):
+            temperatures.append(warm.temperature)
+            return next(others)
+
+        voted = settings.model_copy(update={"vote_runs": 3})
+        agent = PortAnalystAgent(warehouse, first, voted, llm_factory=factory)
+        events = []
+        result = agent.ask("How many vessel calls?", on_event=events.append)
+        assert result.answer == "There are 4 calls."
+        assert result.votes == {"runs": 3, "agreeing": 2}
+        assert temperatures == [voted.vote_temperature] * 2
+        assert {"type": "vote", "runs": 3, "agreeing": 2} in events
+
+    def test_one_run_is_the_default(self, agent_factory):
+        result = agent_factory([answer("3 berths.")]).ask("How many berths?")
+        assert result.votes is None
+
+    def test_a_run_lost_to_the_host_does_not_sink_the_question(self, settings, warehouse):
+        class RateLimited(ScriptedLLM):
+            def complete(self, system, messages, tools):
+                raise RuntimeError("Error code: 429 - Rate limit exceeded")
+
+        others = iter([ScriptedLLM([answer("4 calls.")]), ScriptedLLM([answer("There are 4 calls.")])])
+        voted = settings.model_copy(update={"vote_runs": 3, "max_retries": 0})
+        agent = PortAnalystAgent(warehouse, RateLimited([]), voted, llm_factory=lambda warm: next(others))
+        result = agent.ask("How many vessel calls?")
+        assert result.answer == "4 calls."
+        assert result.votes == {"runs": 2, "agreeing": 2}
+
+    def test_every_run_lost_is_the_question_lost(self, settings, warehouse):
+        class RateLimited(ScriptedLLM):
+            def complete(self, system, messages, tools):
+                raise RuntimeError("Error code: 429 - Rate limit exceeded")
+
+        voted = settings.model_copy(update={"vote_runs": 2})
+        agent = PortAnalystAgent(warehouse, RateLimited([]), voted, llm_factory=lambda warm: RateLimited([]))
+        with pytest.raises(RuntimeError, match="429"):
+            agent.ask("How many vessel calls?")
+
+
+class TestGroupValuesInTheSchema:
+    """A 'World' row among the countries is named in the schema; a product
+    that merely starts with WORLD is not, and a clean table adds nothing."""
+
+    def summary(self, tmp_path, create):
+        import duckdb
+
+        path = tmp_path / "t.duckdb"
+        with duckdb.connect(str(path)) as con:
+            con.execute(create)
+        warehouse = Warehouse(path, max_rows=100, timeout_seconds=5)
+        try:
+            return warehouse.schema_summary()
+        finally:
+            warehouse.close()
+
+    def test_group_rows_are_listed_under_the_table(self, tmp_path):
+        text = self.summary(tmp_path, "CREATE TABLE co2 AS SELECT * FROM (VALUES ('Egypt', 1.0), ('World', 9.0), "
+                                      "('Asia', 5.0), ('High-income countries', 4.0)) AS t(country, co2)")
+        note = text.splitlines()[1]
+        assert note.startswith("  - country also holds 3 group values")
+        assert "'World', 'Asia', 'High-income countries'" in note and "Egypt" not in note
+
+    def test_a_product_named_world_is_not_a_group(self, tmp_path):
+        text = self.summary(tmp_path, "CREATE TABLE items AS SELECT 'WORLD WAR 2 GLIDERS' AS Description, 2 AS Quantity")
+        assert text == "items (1 rows): Description VARCHAR, Quantity INTEGER"

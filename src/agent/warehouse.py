@@ -15,6 +15,7 @@ the database and has no opinions.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -30,6 +31,25 @@ logger = logging.getLogger(__name__)
 
 class QueryTimeout(RuntimeError):
     pass
+
+
+# Values that name a group rather than one entity: a "World" row among the
+# countries, a "Total" row under the items. The prompt tells the model to look
+# for them; on the CO2 data it did not, and added World to the countries or
+# said the data had no continents. So the schema says so when a column holds
+# them - and says nothing, leaving the prompt as it was, when none does.
+# Whole values only: a product called "WORLD WAR 2 GLIDERS" is not a group.
+_GROUP_VALUE = re.compile(
+    r"^(world|total|grand total|all|overall)$"
+    r"|^(africa|asia|europe|north america|south america|latin america|oceania"
+    r"|middle east|european union)( \(.*\))?$"
+    r"|income (countries|economies)|\(excl\. |\boecd\b|least developed",
+    re.IGNORECASE,
+)
+_WHOLE = ("world", "total", "grand total", "all", "overall")
+# All of them, up to this many: shown six and "22 more", the model guessed
+# the rest and put the Democratic Republic of Congo among the groups.
+_SHOW_GROUPS = 40
 
 
 # Every connection in the process shares one configuration: DuckDB refuses a
@@ -121,7 +141,9 @@ class Warehouse:
         self.max_rows = max_rows
         self.timeout_seconds = timeout_seconds
         self._connection = connect(db_path, read_only=True)
-        self._lock = threading.Lock()
+        # Re-entrant: schema_summary holds it while calling describe_table.
+        # Parallel agent runs (vote_runs) share this connection.
+        self._lock = threading.RLock()
 
     def close(self) -> None:
         self._connection.close()
@@ -129,6 +151,10 @@ class Warehouse:
     # --- introspection ---------------------------------------------------
 
     def list_tables(self) -> list[TableInfo]:
+        with self._lock:
+            return self._list_tables()
+
+    def _list_tables(self) -> list[TableInfo]:
         names = [
             row[0]
             for row in self._connection.execute(
@@ -157,11 +183,12 @@ class Warehouse:
                 f"No table named {table!r}. Available tables: {', '.join(sorted(known))}."
             )
         info = known[table]
-        rows = self._connection.execute(
+        with self._lock:
+            rows = self._connection.execute(
             "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
             "WHERE table_schema = 'main' AND table_name = ? ORDER BY ordinal_position",
-            [table],
-        ).fetchall()
+                [table],
+            ).fetchall()
         info.columns = [
             ColumnInfo(name=name, type=data_type, nullable=(nullable == "YES"))
             for name, data_type, nullable in rows
@@ -179,7 +206,32 @@ class Warehouse:
             info = self.describe_table(table.name)
             columns = ", ".join(f"{c.name} {c.type}" for c in info.columns)
             lines.append(f"{info.name} ({info.row_count:,} rows): {columns}")
+            for column in info.columns:
+                if column.type.upper() != "VARCHAR":
+                    continue
+                groups = self._group_values(info.name, column.name)
+                if groups:
+                    shown = ", ".join(f"'{g}'" for g in groups[:_SHOW_GROUPS])
+                    more = f" and {len(groups) - _SHOW_GROUPS} more" if len(groups) > _SHOW_GROUPS else ""
+                    lines.append(
+                        f"  - {column.name} also holds {len(groups)} group values, not single "
+                        f"entities: {shown}{more}. Leave them out when ranking or adding up "
+                        "single entities; use them when the question is about the group."
+                    )
         return "\n".join(lines)
+
+    def _group_values(self, table: str, column: str) -> list[str]:
+        """Values of a text column that name groups ("World", "Asia",
+        "High-income countries"): the whole-data ones first, then plain names
+        before variants such as "Asia (GCP)"."""
+        quoted_table, quoted_column = (f'"{name.replace(chr(34), chr(34) * 2)}"' for name in (table, column))
+        with self._lock:
+            values = self._connection.execute(
+                f"SELECT DISTINCT {quoted_column} FROM {quoted_table} "  # noqa: S608 - names from the catalogue
+                f"WHERE {quoted_column} IS NOT NULL LIMIT 50000"
+            ).fetchall()
+        groups = [v for (v,) in values if isinstance(v, str) and _GROUP_VALUE.search(v.strip())]
+        return sorted(groups, key=lambda v: (v.strip().lower() not in _WHOLE, "(" in v, v))
 
     # --- querying --------------------------------------------------------
 

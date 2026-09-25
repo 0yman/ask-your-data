@@ -141,6 +141,14 @@ class Settings(BaseSettings):
     verify_answers: bool = False
     max_parts: int = 5
     part_max_steps: int = 10
+    # Self-consistency: answer the question this many times in parallel and
+    # keep the answer most runs agree with, by its figures. The first run
+    # uses `temperature`, the others `vote_temperature` - identical runs
+    # would only agree with each other. 1 = a single run. Off on the
+    # measurements (README, "Asking three times"): no gain on the runs that
+    # finished, and three runs at once exceed Mistral's free rate limit.
+    vote_runs: int = 1
+    vote_temperature: float = 0.7
 
     # --- warehouse -------------------------------------------------------
     # The sample dataset, generated from a fixed seed by build_warehouse.py.
