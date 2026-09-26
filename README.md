@@ -804,7 +804,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-231 tests, no network, no API key, under 15 seconds. The suite builds a
+232 tests, no network, no API key, under 15 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

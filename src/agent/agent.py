@@ -199,11 +199,12 @@ def _known_numbers(question: str, results: list[QueryResult]) -> list[float]:
     return known
 
 
-def ungrounded_figures(answer: str, question: str, results: list[QueryResult]) -> list[str]:
-    """Figures in `answer` found in no query result, no query and not in the
-    question. Years and counts up to 10 are left alone: they come from the
-    question's own framing as often as from a result."""
-    known = _known_numbers(question, results)
+def ungrounded_figures(answer: str, question: str, results: list[QueryResult], context: str = "") -> list[str]:
+    """Figures in `answer` found in no query result, no query, not in the
+    question and not in `context` - the schema the model was shown, whose row
+    counts it may quote. Years and counts up to 10 are left alone: they come
+    from the question's own framing as often as from a result."""
+    known = _known_numbers(f"{question}\n{context}", results)
     loose = []
     for piece in _FIGURE.findall(answer or ""):
         try:
@@ -493,7 +494,7 @@ class PortAnalystAgent:
                 if call.name == FINAL_ANSWER_TOOL:
                     draft = str(call.arguments.get("answer", "")).strip()
                     loose = [] if rechecked or index == (max_steps or settings.max_steps) else (
-                        ungrounded_figures(draft, question, toolbox.executed_queries))
+                        ungrounded_figures(draft, question, toolbox.executed_queries, self._schema_text or ""))
                     if loose:
                         rechecked = True
                         logger.warning("Answer figures in no query result: %s - asked to recheck", ", ".join(loose))

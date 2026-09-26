@@ -602,3 +602,17 @@ def test_a_miscopied_figure_is_shown_the_value_it_came_from(agent_factory):
     llm_messages = agent.llm.calls[-1]
     assert "1,064,456.42 (a result has 10,644,560.42)" in llm_messages[-1].content
     assert result.answer == "Revenue was 10,644,560.42."
+
+
+def test_a_row_count_from_the_schema_is_not_sent_back(agent_factory):
+    """The schema shows each table's row count; quoting it is not inventing it."""
+    from agent.agent import ungrounded_figures
+
+    assert ungrounded_figures("The table has 541,909 rows.", "q", [], "online_retail (541,909 rows): Country VARCHAR") == []
+    assert ungrounded_figures("The table has 541,909 rows.", "q", []) == ["541,909"]
+    agent = agent_factory([answer("There are 4 vessel calls in fact_vessel_call.")])
+    rows = agent.warehouse.list_tables()
+    calls = next(t.row_count for t in rows if t.name == "fact_vessel_call")
+    agent = agent_factory([answer(f"fact_vessel_call has {calls:,} rows, well over 10 of them.")])
+    result = agent.ask("How big is fact_vessel_call?")
+    assert not [c for s in result.steps for c in s.tool_calls if c.get("error_kind") == "ungrounded"]
