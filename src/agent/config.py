@@ -169,6 +169,10 @@ class Settings(BaseSettings):
     # finished, and three runs at once exceed Mistral's free rate limit.
     vote_runs: int = 1
     vote_temperature: float = 0.7
+    # The same agent on two engines: "loop", written by hand in agent.py, or
+    # "langgraph", its decisions as nodes and conditional edges (graph.py).
+    # tests/test_graph.py holds them to identical results.
+    engine: Literal["loop", "langgraph"] = "loop"
 
     # --- warehouse -------------------------------------------------------
     # The sample dataset, generated from a fixed seed by build_warehouse.py.

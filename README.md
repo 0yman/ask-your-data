@@ -97,6 +97,39 @@ Each answer comes with:
 **Run SQL yourself** works without a key, so you can look around your data
 before connecting a model.
 
+## Use it from Claude Desktop, Cursor or any MCP client
+
+The same read-only tools the agent uses are also an
+[MCP](https://modelcontextprotocol.io) server, so another assistant can
+explore a database through them, behind the same guardrails:
+
+| Tool | What it does |
+|---|---|
+| `list_tables` | every table with its row count |
+| `describe_table` | a table's columns and types |
+| `sample_rows` | a few rows, to see what the values look like |
+| `run_sql` | one read-only `SELECT`; anything that writes, attaches or reads files is refused |
+| `ask` | the agent's own answer with the SQL behind it (only when a model key is set) |
+
+All of them are marked read-only, so a client does not ask before each call.
+For Claude Desktop, add this to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "ask-your-data": {
+      "command": "python",
+      "args": ["-m", "agent.mcp_server", "--dataset", "retail"],
+      "env": { "PYTHONPATH": "/path/to/ask-your-data/src" }
+    }
+  }
+}
+```
+
+`--dataset` takes `sample`, `retail`, `co2` or `mine`; `--db` takes any
+DuckDB file. The tests drive it through a real MCP client, in memory and over
+stdio the way a desktop client launches it (`tests/test_mcp.py`).
+
 ## Troubleshooting
 
 | What you see | What to do |
@@ -166,11 +199,43 @@ question ──▶ ┌───────────────────�
             answer + result rows + full trace + SQL
 ```
 
-A tool-calling agent, no framework: the model sees the question and the
+A tool-calling agent, written by hand: the model sees the question and the
 schema, calls tools (`list_tables`, `describe_table`, `sample_rows`,
 `run_sql`, `final_answer`), reads what comes back, and stops when it has the
 numbers. Every SQL statement is parsed and checked before it reaches the
 database, on a connection that is read-only in its own right.
+
+### The same agent on LangGraph
+
+`AGENT_ENGINE=langgraph` runs the same agent as a
+[LangGraph](https://langchain-ai.github.io/langgraph/) state graph
+([`graph.py`](src/agent/graph.py)): each decision the loop makes is a node,
+and each branch a conditional edge.
+
+```
+model ─┬─> nudge ──> model            an empty turn gets one nudge
+       ├─> text_answer ──> END        prose without the answer tool is accepted
+       └─> act ─┬─> END               final answer accepted
+                ├─> model             tool results, or one answer recheck
+                └─> salvage ──> END   failures in a row, or out of steps
+```
+
+The prompt, tools, guardrails, context compaction, answer check and salvage
+are shared, so the engines differ only in control flow, and that is held to
+account twice. [`test_graph.py`](tests/test_graph.py) scripts eleven
+conversations covering every way a question can end and requires both engines
+to produce identical answers, steps, tool calls and page events. With a real
+model, interleaved in one session, three runs each:
+
+| Ministral 14B | Hand-written loop | LangGraph |
+|---|---|---|
+| Real set (of 17) | 16.7 (16, 17, 17) | 17.0 (17, 17, 17) |
+| Hard set (of 12) | 9.0 (8, 11, 8) | 9.7 (11, 8, 10) |
+| Seconds per question, real / hard | 9.0 / 13.7 | 7.4 / 12.7 |
+
+The per-question differences run both ways and are the model's own
+run-to-run noise; the graph costs nothing measurable. The loop stays the
+default: it is the reference the graph is tested against.
 
 The rest of this README is the engineering write-up: the sample data, the
 guardrails, and the evaluation — which, like the sibling project, changed
@@ -768,6 +833,9 @@ src/agent/
   tools.py       tool specs + dispatcher; failures return messages
   llm.py         provider-neutral tool-calling; Gemini + scripted stub
   agent.py       the loop: steps, self-correction, tracing
+  graph.py       the same agent as a LangGraph (AGENT_ENGINE=langgraph)
+  planning.py    plan, solve, synthesise, verify - measured, off by default
+  mcp_server.py  the tools as an MCP server (python -m agent.mcp_server)
   sessions.py    one workspace per visitor on a public server; the question quota
   datasets.py    CSV / Excel files -> tables (the only code that writes)
   envfile.py     saving the API key from the page into .env
@@ -804,7 +872,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-232 tests, no network, no API key, under 15 seconds. The suite builds a
+250 tests, no network, no API key, under 15 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

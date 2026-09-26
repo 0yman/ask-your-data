@@ -435,6 +435,17 @@ class PortAnalystAgent:
     def _ask(
         self, question: str, emit: Callable[[dict[str, Any]], None], max_steps: int | None = None
     ) -> AgentResult:
+        """One pass through the agent, on the configured engine: the loop below,
+        or the same decisions as a LangGraph (graph.py)."""
+        if self.settings.engine == "langgraph":
+            from .graph import ask_graph
+
+            return ask_graph(self, question, emit, max_steps)
+        return self._ask_loop(question, emit, max_steps)
+
+    def _ask_loop(
+        self, question: str, emit: Callable[[dict[str, Any]], None], max_steps: int | None = None
+    ) -> AgentResult:
         settings = self.settings
         toolbox = ToolBox(
             warehouse=self.warehouse, max_rows_to_model=settings.max_rows_to_model
