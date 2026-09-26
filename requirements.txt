@@ -1,5 +1,5 @@
 duckdb>=1.0
-sqlglot>=25.0
+sqlglot>=30.0
 google-genai>=1.0
 openai>=1.40             # only used with AGENT_LLM_BACKEND=openai
 python-multipart>=0.0.9  # file uploads
