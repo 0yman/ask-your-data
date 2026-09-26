@@ -479,12 +479,36 @@ years*. Qwen's and Ministral's misses are both the summing traps - counting
 World and continents into "global emissions", and crowning the product whose
 one huge order was returned.
 
+### NVIDIA's hosted catalogue
+
+[build.nvidia.com](https://build.nvidia.com) hosts much larger open models
+for free, at about 40 requests a minute, on trial terms meant for evaluation
+rather than serving users - which fits a portfolio demo. Latency decided most
+of it before accuracy could: timed on 26 September 2026, one short request
+each, twice in a row.
+
+| Model on NVIDIA | One call | Through the agent |
+|---|---|---|
+| **Nemotron 3 Ultra** (550B, 55B active) | **1-3 s** | real set **17/17**, hard set **11/12**; 27 s / 51 s a question |
+| Kimi K3 | 90-160 s | hard set 5/12 - but 7 of its answers were not answers: the endpoint returned `<\|close\|>!!!!` or nothing, so this measures the endpoint, not the model |
+| GLM 5.3, GLM 5.3 Flash | 75-135 s | not run: 4-8 calls a question would take 10-20 minutes |
+| DeepSeek V4.1 Flash | ~220 s | not run, for the same reason |
+| Gemma 4 31B | 12-27 s, then a 240 s timeout | not run: unstable |
+
+Nemotron's figures are one run; in the same session Ministral scored 17/17
+and 8/12. One run on twelve hard questions moves by one or two, so read
+"more accurate on the hard set" as likely rather than settled.
+
 So the page offers two, and the visitor picks:
 
-- **Ministral 14B** - the default: seven seconds a question, and free-tier
-  headroom that a broad, many-query question does not exhaust.
-- **Qwen 3.8 27B on Groq** - the most accurate open model here, when waiting
-  on its per-minute limit is acceptable.
+- **Nemotron 3 Ultra** (NVIDIA) - the default: the most accurate model
+  measured here, at 30 to 50 seconds a question.
+- **Ministral 14B** (Mistral) - about four times faster, and the answer when
+  NVIDIA's free queue is slow.
+
+`AGENT_OFFERED_MODELS` chooses which catalog models are offered and in what
+order; Qwen 3.8 27B on Groq stays in the catalog. A model that thinks before
+it answers carries its own output and time budget in `MODEL_CATALOG`.
 
 Each has its own daily cap on the server's key, its own concurrency slots, and
 its own entry in the picker. When a host says a model's allowance is used up
@@ -780,7 +804,7 @@ which SQL executed, what failed, and what it cost.
 
 ## Testing
 
-227 tests, no network, no API key, under 15 seconds. The suite builds a
+231 tests, no network, no API key, under 15 seconds. The suite builds a
 miniature warehouse whose every aggregate can be checked by hand, and drives
 the loop with a scripted model so the scenarios that matter — a bad query
 corrected, a blocked `DROP`, a model that never stops calling tools — are

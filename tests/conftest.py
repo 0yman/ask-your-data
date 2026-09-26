@@ -83,7 +83,7 @@ def settings(tiny_db: Path, tmp_path: Path) -> Settings:
         # Never the developer's .env: its keys would switch the suite onto
         # real models and put secrets in test output.
         _env_file=None,
-        google_api_key=None, openai_api_key=None, groq_api_key=None, mistral_api_key=None,
+        google_api_key=None, openai_api_key=None, groq_api_key=None, mistral_api_key=None, nvidia_api_key=None,
         llm_backend="scripted",
         # The single-pass loop; tests/test_planning.py turns planning on.
         plan_questions=False, verify_answers=False,

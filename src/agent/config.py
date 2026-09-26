@@ -35,6 +35,10 @@ class ModelOption(BaseModel):
     note: str           # one line for the picker: what it is good at, what it costs you
     per_day: int        # questions a day on the server's key
     concurrent: int = 1
+    # For models that think before they answer: room for the thinking, and
+    # time for a free host's queue. None keeps the global setting.
+    max_output_tokens: int | None = None
+    request_timeout_ms: int | None = None
 
     @property
     def label(self) -> str:
@@ -42,6 +46,17 @@ class ModelOption(BaseModel):
 
 
 MODEL_CATALOG = (
+    # NVIDIA's hosted catalogue (build.nvidia.com), free and rate-limited
+    # (about 40 requests a minute). Of the models it hosts, this was the one
+    # that answered in seconds when the others queued for minutes, and it
+    # scored highest of any model measured here (README, "Choosing the model").
+    ModelOption(
+        id="nemotron-3-ultra", name="Nemotron 3 Ultra", host="NVIDIA",
+        base_url="https://integrate.api.nvidia.com/v1", model="nvidia/nemotron-3-ultra-550b-a55b",
+        key_field="nvidia_api_key",
+        note="Most accurate in our tests: 17 of 17 real-data questions, 11 of 12 hard ones. About 30 to 50 seconds a question.",
+        per_day=200, concurrent=2, max_output_tokens=8192, request_timeout_ms=120_000,
+    ),
     # Mistral's free plan opens its small and coding models - Large, Medium
     # and Small answer "0 requests a minute" - with room to spare: 30
     # requests and 937K tokens a minute. Measured 15/17 on the real-data
@@ -51,7 +66,7 @@ MODEL_CATALOG = (
         id="ministral-14b", name="Ministral 14B", host="Mistral",
         base_url="https://api.mistral.ai/v1", model="ministral-14b-2512",
         key_field="mistral_api_key",
-        note="Fast, with room for long questions. 15 of 17 on our real-data test.",
+        note="Fastest, about 7 to 13 seconds a question. 16 to 17 of 17 real-data questions, 8 to 10 of 12 hard ones.",
         per_day=150, concurrent=2,
     ),
     # Free plan: 8K tokens a minute, 200K a day. Each step resends the
@@ -84,6 +99,11 @@ class Settings(BaseSettings):
     # configured by llm_backend below, as before.
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     mistral_api_key: str | None = Field(default=None, alias="MISTRAL_API_KEY")
+    nvidia_api_key: str | None = Field(default=None, alias="NVIDIA_API_KEY")
+    # Which catalog models the page offers, in this order ([] = every model
+    # whose key is set). From the environment as JSON:
+    # AGENT_OFFERED_MODELS='["nemotron-3-ultra","ministral-14b"]'
+    offered_models: list[str] = []
     # Which catalog model a new visitor starts on ("" = the first available).
     default_model: str = ""
 
@@ -218,7 +238,11 @@ class Settings(BaseSettings):
         return [name for name in EXAMPLE_DATASETS if self.dataset_path(name).exists()]
 
     def available_models(self) -> list[ModelOption]:
-        return [option for option in MODEL_CATALOG if getattr(self, option.key_field)]
+        keyed = [option for option in MODEL_CATALOG if getattr(self, option.key_field)]
+        if not self.offered_models:
+            return keyed
+        by_id = {option.id: option for option in keyed}
+        return [by_id[model_id] for model_id in self.offered_models if model_id in by_id]
 
     def model_option(self, model_id: str | None) -> ModelOption | None:
         return next((o for o in self.available_models() if o.id == model_id), None)
@@ -238,6 +262,8 @@ class Settings(BaseSettings):
             "openai_fallback_models": [],
             "openai_backup_api_key": None,
             "openai_backup_model": "",
+            "max_output_tokens": option.max_output_tokens or self.max_output_tokens,
+            "request_timeout_ms": option.request_timeout_ms or self.request_timeout_ms,
         })
 
     def upload_limit_mb(self) -> int:

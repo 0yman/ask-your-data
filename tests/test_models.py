@@ -178,3 +178,31 @@ def test_a_model_out_of_allowance_is_shown_resting(two_models):
     models = {m["id"]: m for m in a.get("/status").json()["models"]}
     assert models["qwen-groq"]["resting_minutes"] == 5
     assert models["ministral-14b"]["resting_minutes"] is None
+
+
+class TestOfferedModels:
+    """AGENT_OFFERED_MODELS picks which keyed models the page offers, in order;
+    a thinking model brings its own output and time budget."""
+
+    def keyed(self, settings, **update):
+        return settings.model_copy(update={"groq_api_key": "g", "mistral_api_key": "m", "nvidia_api_key": "n", **update})
+
+    def test_every_keyed_model_is_offered_by_default(self, settings):
+        assert [o.id for o in self.keyed(settings).available_models()] == ["nemotron-3-ultra", "ministral-14b", "qwen-groq"]
+
+    def test_the_offered_list_chooses_and_orders(self, settings):
+        chosen = self.keyed(settings, offered_models=["ministral-14b", "nemotron-3-ultra"])
+        assert [o.id for o in chosen.available_models()] == ["ministral-14b", "nemotron-3-ultra"]
+        assert chosen.default_model_option().id == "ministral-14b"
+
+    def test_an_offered_model_without_its_key_is_left_out(self, settings):
+        chosen = self.keyed(settings, nvidia_api_key=None, offered_models=["nemotron-3-ultra", "ministral-14b"])
+        assert [o.id for o in chosen.available_models()] == ["ministral-14b"]
+
+    def test_a_thinking_model_gets_its_own_budget(self, settings):
+        keyed = self.keyed(settings)
+        nemotron = keyed.with_model(keyed.model_option("nemotron-3-ultra"))
+        ministral = keyed.with_model(keyed.model_option("ministral-14b"))
+        assert (nemotron.max_output_tokens, nemotron.request_timeout_ms) == (8192, 120_000)
+        assert (ministral.max_output_tokens, ministral.request_timeout_ms) == (settings.max_output_tokens, settings.request_timeout_ms)
+        assert nemotron.openai_api_key == "n" and nemotron.openai_base_url == "https://integrate.api.nvidia.com/v1"

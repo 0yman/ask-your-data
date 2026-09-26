@@ -16,8 +16,14 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      # The two the page offers, most accurate first (README, "Choosing the
+      # model"); Groq's Qwen stays in the catalog for local use.
+      - key: AGENT_OFFERED_MODELS
+        value: '["nemotron-3-ultra","ministral-14b"]'
       - key: AGENT_DEFAULT_MODEL
-        value: ministral-14b
+        value: nemotron-3-ultra
       # For visitors who add their own Gemini key on the page.
       - key: GOOGLE_API_KEY
         sync: false
